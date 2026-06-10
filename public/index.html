@@ -1,0 +1,254 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>CS Duel - 1v1</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { width: 100%; height: 100%; overflow: hidden; background: #111; font-family: 'Segoe UI', Arial, sans-serif; }
+  canvas { display: block; }
+
+  .overlay {
+    position: fixed; inset: 0; display: flex; align-items: center; justify-content: center;
+    background: rgba(10, 12, 18, 0.92); z-index: 50; color: #eee;
+  }
+  .panel {
+    background: #1a1f2b; border: 1px solid #2e3a52; border-radius: 12px;
+    padding: 36px 44px; width: 420px; max-width: 92vw; text-align: center;
+    box-shadow: 0 20px 60px rgba(0,0,0,0.6);
+  }
+  .panel h1 { font-size: 32px; letter-spacing: 2px; margin-bottom: 6px; color: #ffb13d; }
+  .panel .sub { color: #8b97ad; font-size: 13px; margin-bottom: 24px; }
+  .panel input {
+    width: 100%; padding: 12px 14px; margin-bottom: 12px; border-radius: 8px;
+    border: 1px solid #38445e; background: #10141d; color: #fff; font-size: 16px; outline: none;
+  }
+  .panel input:focus { border-color: #ffb13d; }
+  .panel button {
+    width: 100%; padding: 13px; margin-top: 6px; border: none; border-radius: 8px;
+    font-size: 16px; font-weight: 700; cursor: pointer; transition: transform .08s, filter .15s;
+  }
+  .panel button:hover { filter: brightness(1.15); }
+  .panel button:active { transform: scale(0.98); }
+  .btn-create { background: #ffb13d; color: #1a1300; }
+  .btn-join { background: #3d6dff; color: #fff; }
+  .divider { display: flex; align-items: center; gap: 10px; margin: 18px 0 12px; color: #56627d; font-size: 12px; }
+  .divider::before, .divider::after { content: ''; flex: 1; height: 1px; background: #2e3a52; }
+  .err { color: #ff6b6b; font-size: 14px; min-height: 18px; margin-top: 10px; }
+
+  /* Avatar secici */
+  .section-label { text-align: left; font-size: 11px; letter-spacing: 1px; color: #56627d; margin: 4px 0 6px; }
+  .avatars { display: flex; gap: 8px; margin-bottom: 14px; }
+  .avatar-card {
+    flex: 1; background: #10141d; border: 2px solid #2e3a52; border-radius: 10px;
+    padding: 10px 4px 7px; cursor: pointer; transition: border-color .15s, transform .1s, background .15s;
+  }
+  .avatar-card:hover { transform: translateY(-2px); }
+  .avatar-card.sel { border-color: #ffb13d; background: #1c2230; }
+  .avatar-card span { display: block; font-size: 11px; color: #aab6cc; margin-top: 6px; }
+  .av-head { width: 24px; height: 24px; margin: 0 auto; border-radius: 4px; position: relative; }
+  .av-gear { position: absolute; left: -1px; right: -1px; height: 7px; top: -3px; border-radius: 3px; }
+  .av-eye { position: absolute; top: 9px; width: 6px; height: 6px; background: #fff; border-radius: 50%; }
+  .av-eye::after { content: ''; position: absolute; right: 0; top: 1px; width: 3px; height: 3px; background: #111; border-radius: 50%; }
+  .av-eye.l { left: 4px; } .av-eye.r { right: 4px; }
+  .av-body { width: 32px; height: 16px; margin: 2px auto 0; border-radius: 3px; }
+
+  /* Hassasiyet kaydiricisi */
+  .sens-row { display: flex; align-items: center; gap: 10px; margin: 2px 0 12px; color: #8b97ad; font-size: 13px; }
+  .sens-row input[type=range] { flex: 1; accent-color: #ffb13d; cursor: pointer; }
+  .sens-row b { color: #ffb13d; min-width: 36px; text-align: right; font-size: 13px; }
+
+  #waiting .code-box {
+    font-size: 42px; letter-spacing: 10px; font-weight: 800; color: #ffb13d;
+    background: #10141d; border: 1px dashed #3a4763; border-radius: 10px;
+    padding: 16px; margin: 16px 0; cursor: pointer; user-select: all;
+  }
+  #waiting .hint { color: #8b97ad; font-size: 14px; }
+  .pulse { animation: pulse 1.4s infinite; }
+  @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.45; } }
+
+  /* HUD */
+  #hud { position: fixed; inset: 0; pointer-events: none; z-index: 10; display: none; color: #fff; }
+
+  #crosshair {
+    position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%);
+    width: 24px; height: 24px;
+  }
+  #crosshair::before, #crosshair::after {
+    content: ''; position: absolute; background: #6dff6d;
+    box-shadow: 0 0 3px rgba(0,0,0,0.9);
+  }
+  #crosshair::before { left: 50%; top: 0; width: 2px; height: 100%; transform: translateX(-50%); }
+  #crosshair::after { top: 50%; left: 0; height: 2px; width: 100%; transform: translateY(-50%); }
+  #crosshair .dotgap { position: absolute; inset: 8px; background: transparent; }
+
+  #hitmarker {
+    position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%) rotate(45deg);
+    width: 28px; height: 28px; opacity: 0; transition: opacity .1s;
+  }
+  #hitmarker span { position: absolute; background: #fff; box-shadow: 0 0 4px #000; }
+  #hitmarker span:nth-child(1) { left: 50%; top: 0; width: 3px; height: 9px; transform: translateX(-50%); }
+  #hitmarker span:nth-child(2) { left: 50%; bottom: 0; width: 3px; height: 9px; transform: translateX(-50%); }
+  #hitmarker span:nth-child(3) { top: 50%; left: 0; height: 3px; width: 9px; transform: translateY(-50%); }
+  #hitmarker span:nth-child(4) { top: 50%; right: 0; height: 3px; width: 9px; transform: translateY(-50%); }
+  #hitmarker.head span { background: #ff4040; }
+
+  #hpwrap {
+    position: absolute; left: 24px; bottom: 24px; width: 260px;
+  }
+  #hpbar-bg { background: rgba(0,0,0,0.55); border-radius: 6px; height: 26px; overflow: hidden; border: 1px solid rgba(255,255,255,0.15); }
+  #hpbar { height: 100%; width: 100%; background: linear-gradient(90deg, #2ecc71, #27ae60); transition: width .2s, background .2s; }
+  #hptext { position: absolute; left: 0; right: 0; top: 3px; text-align: center; font-weight: 800; font-size: 15px; text-shadow: 0 1px 3px #000; }
+
+  #ammowrap { position: absolute; right: 24px; bottom: 24px; text-align: right; text-shadow: 0 2px 6px #000; }
+  #weaponname { font-size: 15px; color: #ffb13d; font-weight: 700; letter-spacing: 1px; }
+  #ammo { font-size: 40px; font-weight: 800; }
+  #ammo small { font-size: 18px; color: #9aa7bf; }
+  #reloadtext { color: #ffb13d; font-size: 14px; min-height: 18px; font-weight: 700; }
+
+  #score {
+    position: absolute; top: 16px; left: 50%; transform: translateX(-50%);
+    background: rgba(0,0,0,0.55); padding: 8px 22px; border-radius: 8px;
+    font-size: 18px; font-weight: 700; text-shadow: 0 1px 2px #000;
+    border: 1px solid rgba(255,255,255,0.1);
+  }
+  #score .me { color: #6db3ff; } #score .en { color: #ff6b6b; }
+
+  #roomtag { position: absolute; top: 16px; right: 16px; background: rgba(0,0,0,0.45); padding: 6px 12px; border-radius: 6px; font-size: 13px; color: #8b97ad; }
+  #roomtag b { color: #ffb13d; letter-spacing: 2px; }
+
+  #killfeed { position: absolute; top: 64px; right: 16px; display: flex; flex-direction: column; gap: 6px; align-items: flex-end; }
+  .feed-item {
+    background: rgba(0,0,0,0.6); padding: 6px 12px; border-radius: 6px; font-size: 14px;
+    border-left: 3px solid #ff6b6b; animation: feedin .2s ease-out;
+  }
+  @keyframes feedin { from { transform: translateX(30px); opacity: 0; } }
+
+  #pickup-hint {
+    position: absolute; left: 50%; top: 60%; transform: translateX(-50%);
+    background: rgba(0,0,0,0.65); padding: 8px 18px; border-radius: 8px;
+    font-size: 16px; display: none; border: 1px solid rgba(255,177,61,0.5);
+  }
+  #pickup-hint b { color: #ffb13d; }
+
+  #dmg-vignette {
+    position: absolute; inset: 0; opacity: 0; transition: opacity .4s;
+    background: radial-gradient(ellipse at center, transparent 55%, rgba(255,0,0,0.55) 100%);
+  }
+
+  #death-overlay {
+    position: absolute; inset: 0; display: none; align-items: center; justify-content: center;
+    flex-direction: column; background: rgba(80, 0, 0, 0.45); text-shadow: 0 2px 8px #000;
+  }
+  #death-overlay h2 { font-size: 46px; color: #ff5252; margin-bottom: 10px; }
+  #death-overlay p { font-size: 20px; }
+
+  #toast {
+    position: absolute; left: 50%; top: 26%; transform: translateX(-50%);
+    background: rgba(0,0,0,0.7); padding: 10px 24px; border-radius: 8px;
+    font-size: 17px; opacity: 0; transition: opacity .3s; color: #ffe9c4;
+    border: 1px solid rgba(255,177,61,0.4);
+  }
+
+  #prot-hint {
+    position: absolute; left: 50%; top: 34%; transform: translateX(-50%);
+    background: rgba(30,90,160,0.55); border: 1px solid rgba(120,190,255,0.6);
+    padding: 6px 18px; border-radius: 8px; font-size: 15px; font-weight: 700;
+    display: none; text-shadow: 0 1px 3px #000;
+  }
+
+  #help { position: absolute; bottom: 24px; left: 50%; transform: translateX(-50%); color: rgba(255,255,255,0.45); font-size: 12px; text-align: center; }
+</style>
+</head>
+<body>
+
+<!-- Ana menu -->
+<div class="overlay" id="menu">
+  <div class="panel">
+    <h1>CS DUEL</h1>
+    <div class="sub">1v1 — Kafadan tek atar. Gövde 33 hasar.</div>
+    <input id="name-input" maxlength="16" placeholder="Takma adın" autocomplete="off">
+    <div class="section-label">KARAKTERİNİ SEÇ</div>
+    <div class="avatars" id="avatars">
+      <div class="avatar-card sel" data-av="komando">
+        <div class="av-head" style="background:#e0ac69"><div class="av-gear" style="background:#b02e2e"></div><div class="av-eye l"></div><div class="av-eye r"></div></div>
+        <div class="av-body" style="background:#3d5c3a"></div><span>Komando</span>
+      </div>
+      <div class="avatar-card" data-av="polis">
+        <div class="av-head" style="background:#e8b882"><div class="av-gear" style="background:#16294f;height:9px;top:-5px"></div><div class="av-eye l"></div><div class="av-eye r"></div></div>
+        <div class="av-body" style="background:#24407e"></div><span>Polis</span>
+      </div>
+      <div class="avatar-card" data-av="haydut">
+        <div class="av-head" style="background:#23232a"><div class="av-eye l"></div><div class="av-eye r"></div></div>
+        <div class="av-body" style="background:#5a4632"></div><span>Haydut</span>
+      </div>
+      <div class="avatar-card" data-av="hayalet">
+        <div class="av-head" style="background:#ece2d4"><div class="av-gear" style="background:#454c58;height:10px;top:-4px;left:-3px;right:-3px"></div><div class="av-eye l"></div><div class="av-eye r"></div></div>
+        <div class="av-body" style="background:#8f9aa8"></div><span>Hayalet</span>
+      </div>
+    </div>
+    <div class="sens-row"><span>🖱️ Hassasiyet</span><input type="range" id="sens-slider" min="0.2" max="3" step="0.05" value="1"><b id="sens-val">1.00</b></div>
+    <button class="btn-create" id="btn-create">ODA KUR</button>
+    <div class="divider">veya arkadaşının odasına katıl</div>
+    <input id="code-input" maxlength="5" placeholder="ODA KODU" style="text-transform:uppercase; text-align:center; letter-spacing:6px; font-weight:700;" autocomplete="off">
+    <button class="btn-join" id="btn-join">ODAYA KATIL</button>
+    <div class="err" id="menu-err"></div>
+  </div>
+</div>
+
+<!-- Bekleme ekrani -->
+<div class="overlay" id="waiting" style="display:none">
+  <div class="panel">
+    <h1>ODA HAZIR</h1>
+    <div class="sub">Bu kodu arkadaşına gönder:</div>
+    <div class="code-box" id="code-display" title="Kopyalamak için tıkla">-----</div>
+    <div class="hint pulse" id="waiting-hint">Rakip bekleniyor...</div>
+    <div class="err" id="copy-info" style="color:#6dff6d"></div>
+  </div>
+</div>
+
+<!-- Devam ekrani (pointer lock kaybinda) -->
+<div class="overlay" id="resume" style="display:none">
+  <div class="panel">
+    <h1 id="resume-title">DURAKLADI</h1>
+    <div class="sub" id="resume-sub">Oyuna dönmek için tıkla</div>
+    <div class="sens-row"><span>🖱️ Hassasiyet</span><input type="range" id="sens-slider2" min="0.2" max="3" step="0.05" value="1"><b id="sens-val2">1.00</b></div>
+    <button class="btn-create" id="btn-resume">DEVAM ET</button>
+  </div>
+</div>
+
+<!-- HUD -->
+<div id="hud">
+  <div id="dmg-vignette"></div>
+  <div id="crosshair"></div>
+  <div id="hitmarker"><span></span><span></span><span></span><span></span></div>
+  <div id="score"><span class="me" id="score-me-name">Sen</span> <span id="score-me">0</span> &nbsp;—&nbsp; <span id="score-en">0</span> <span class="en" id="score-en-name">Rakip</span></div>
+  <div id="roomtag">ODA <b id="roomtag-code"></b></div>
+  <div id="killfeed"></div>
+  <div id="hpwrap">
+    <div id="hpbar-bg"><div id="hpbar"></div></div>
+    <div id="hptext">100</div>
+  </div>
+  <div id="ammowrap">
+    <div id="weaponname">AK-47</div>
+    <div id="ammo">30 <small>/ 30</small></div>
+    <div id="reloadtext"></div>
+  </div>
+  <div id="pickup-hint"><b>[E]</b> <span id="pickup-name"></span> al</div>
+  <div id="death-overlay">
+    <h2>ÖLDÜN</h2>
+    <p><span id="respawn-count">3</span> saniye sonra yeniden doğacaksın...</p>
+  </div>
+  <div id="prot-hint">🛡️ DOĞUM KORUMASI</div>
+  <div id="toast"></div>
+  <div id="help">WASD: hareket &nbsp;•&nbsp; SPACE: zıpla &nbsp;•&nbsp; SOL TIK: ateş &nbsp;•&nbsp; SAĞ TIK: nişan (sniper) &nbsp;•&nbsp; R: şarjör &nbsp;•&nbsp; E: silah al</div>
+</div>
+
+<script src="/socket.io/socket.io.js"></script>
+<script type="importmap">
+{ "imports": { "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js" } }
+</script>
+<script type="module" src="game.js"></script>
+</body>
+</html>

@@ -1,0 +1,13 @@
+{
+  "name": "cs-duel",
+  "version": "1.0.0",
+  "description": "2 kisilik CS tarzi 3D FPS - Socket.IO + Three.js",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "express": "^4.19.2",
+    "socket.io": "^4.7.5"
+  }
+}
