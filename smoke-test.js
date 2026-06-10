@@ -27,18 +27,19 @@ function assert(cond, msg) {
 
   const [sA, sB] = await Promise.all([startA, startB]);
   assert(sA.players.length === 2, 'start: 2 oyuncu geldi');
-  assert(sA.weapons.length === 3, 'start: 3 yer silahi geldi');
+  assert(sA.weapons.length === 5, 'start: 5 yer silahi geldi');
+  assert(sA.arena === 'depot', 'varsayilan arena depot geldi');
 
   // Govde vurusu: 100 -> 67
   const h1 = new Promise((res) => b.once('health', res));
-  a.emit('hit', { part: 'body' });
+  a.emit('hit', { part: 'body', targetId: b.id });
   const hr1 = await h1;
   assert(hr1.hp === 67, `govde vurusu 33 hasar (hp=${hr1.hp})`);
 
   // Kafa vurusu: 67 -> 0, olum + respawn
   const death = new Promise((res) => b.once('death', res));
   const respawn = new Promise((res) => b.once('respawn', res));
-  a.emit('hit', { part: 'head' });
+  a.emit('hit', { part: 'head', targetId: b.id });
   const d = await death;
   assert(d.victim === b.id && d.headshot, 'kafadan vurus oldurdu');
   assert(d.scores[a.id] === 1, 'skor islendi');

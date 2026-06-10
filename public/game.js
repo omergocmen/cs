@@ -37,9 +37,11 @@ const AVATARS = {
   hayalet: { body: 0x8f9aa8, legs: 0x5d6672, skin: 0xece2d4, gear: 'hood', gearColor: 0x454c58 },
 };
 
-const EYE_HEIGHT = 1.6;
+const STAND_EYE_HEIGHT = 1.6;
+const CROUCH_EYE_HEIGHT = 1.0;
 const PLAYER_RADIUS = 0.4;
 const MOVE_SPEED = 7.5;
+const CROUCH_SPEED = 3.8;
 const JUMP_VEL = 8;
 const GRAVITY = 22;
 const SEND_INTERVAL = 50; // ms
@@ -51,8 +53,33 @@ const $ = (id) => document.getElementById(id);
 let myName = 'Oyuncu';
 let roomCode = '';
 let gameRunning = false;
+let gameMode = localStorage.getItem('cs_mode') || 'duel';
+let arenaChoice = localStorage.getItem('cs_arena') || 'depot';
+let myTeam = null;
+let currentRound = 1;
+let teamScores = { police: 0, bandit: 0 };
 let myAvatar = localStorage.getItem('cs_avatar') || 'komando';
 if (!AVATARS[myAvatar]) myAvatar = 'komando';
+if (!['duel', 'arena', 'team'].includes(gameMode)) gameMode = 'duel';
+if (!['depot', 'lanes', 'fortress', 'yard', 'crossfire'].includes(arenaChoice)) arenaChoice = 'depot';
+
+document.querySelectorAll('.mode-card').forEach((card) => {
+  card.classList.toggle('sel', card.dataset.mode === gameMode);
+  card.onclick = () => {
+    gameMode = card.dataset.mode;
+    localStorage.setItem('cs_mode', gameMode);
+    document.querySelectorAll('.mode-card').forEach((c) => c.classList.toggle('sel', c === card));
+  };
+});
+
+document.querySelectorAll('[data-arena]').forEach((card) => {
+  card.classList.toggle('sel', card.dataset.arena === arenaChoice);
+  card.onclick = () => {
+    arenaChoice = card.dataset.arena;
+    localStorage.setItem('cs_arena', arenaChoice);
+    document.querySelectorAll('[data-arena]').forEach((c) => c.classList.toggle('sel', c === card));
+  };
+});
 
 document.querySelectorAll('.avatar-card').forEach((card) => {
   card.classList.toggle('sel', card.dataset.av === myAvatar);
@@ -65,9 +92,11 @@ document.querySelectorAll('.avatar-card').forEach((card) => {
 
 $('btn-create').onclick = () => {
   myName = $('name-input').value.trim() || 'Oyuncu';
-  socket.emit('createRoom', { name: myName, avatar: myAvatar }, (res) => {
+  socket.emit('createRoom', { name: myName, avatar: myAvatar, mode: gameMode, arena: arenaChoice }, (res) => {
     if (res.error) return ($('menu-err').textContent = res.error);
     roomCode = res.code;
+    gameMode = res.mode || gameMode;
+    arenaChoice = res.arena || arenaChoice;
     showWaiting(res.code);
   });
 };
@@ -79,6 +108,8 @@ $('btn-join').onclick = () => {
   socket.emit('joinRoom', { code, name: myName, avatar: myAvatar }, (res) => {
     if (res.error) return ($('menu-err').textContent = res.error);
     roomCode = res.code;
+    gameMode = res.mode || gameMode;
+    arenaChoice = res.arena || arenaChoice;
     showWaiting(res.code);
   });
 };
@@ -108,10 +139,70 @@ function toast(msg, ms = 2500) {
   t._timer = setTimeout(() => (t.style.opacity = 0), ms);
 }
 
+function centerBanner(msg, kind = '', ms = 1300) {
+  const b = $('center-banner');
+  if (!b) return;
+  b.className = kind ? kind : '';
+  b.textContent = msg;
+  requestAnimationFrame(() => b.classList.add('show'));
+  clearTimeout(b._timer);
+  b._timer = setTimeout(() => b.classList.remove('show'), ms);
+}
+
 // ================== THREE.JS SAHNE ==================
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x87a8c8);
 scene.fog = new THREE.Fog(0x87a8c8, 50, 120);
+let floorMesh = null;
+
+const ARENA_THEMES = {
+  depot: { sky: 0x87a8c8, fog: 0x87a8c8, floor: '#9a8f72', line: 'rgba(0,0,0,0.18)', name: 'depot' },
+  lanes: { sky: 0xd8b47b, fog: 0xd8b47b, floor: '#c79d57', line: 'rgba(80,45,10,0.22)', name: 'desert' },
+  fortress: { sky: 0x9da8b8, fog: 0x9da8b8, floor: '#69717d', line: 'rgba(255,255,255,0.10)', name: 'fortress' },
+  yard: { sky: 0x8fcf98, fog: 0x8fcf98, floor: '#4f7c47', line: 'rgba(20,55,20,0.25)', name: 'yard' },
+  crossfire: { sky: 0x201d3a, fog: 0x201d3a, floor: '#25263f', line: 'rgba(90,220,255,0.22)', name: 'neon' },
+};
+
+function makeFloorTexture(theme) {
+  const c = document.createElement('canvas');
+  c.width = c.height = 256;
+  const ctx = c.getContext('2d');
+  ctx.fillStyle = theme.floor;
+  ctx.fillRect(0, 0, 256, 256);
+  ctx.strokeStyle = theme.line;
+  ctx.lineWidth = 2;
+  ctx.strokeRect(0, 0, 256, 256);
+  ctx.strokeStyle = theme.line;
+  const step = theme.name === 'neon' ? 32 : 64;
+  for (let x = 0; x <= 256; x += step) {
+    ctx.beginPath();
+    ctx.moveTo(x, 0);
+    ctx.lineTo(x, 256);
+    ctx.stroke();
+  }
+  for (let y = 0; y <= 256; y += step) {
+    ctx.beginPath();
+    ctx.moveTo(0, y);
+    ctx.lineTo(256, y);
+    ctx.stroke();
+  }
+  return new THREE.CanvasTexture(c);
+}
+
+function applyArenaTheme(arena = 'depot') {
+  const theme = ARENA_THEMES[arena] || ARENA_THEMES.depot;
+  scene.background = new THREE.Color(theme.sky);
+  scene.fog = new THREE.Fog(theme.fog, arena === 'crossfire' ? 38 : 50, arena === 'crossfire' ? 95 : 120);
+  if (floorMesh) {
+    const oldMap = floorMesh.material.map;
+    const tex = makeFloorTexture(theme);
+    tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+    tex.repeat.set(arena === 'crossfire' ? 18 : 15, arena === 'crossfire' ? 18 : 15);
+    floorMesh.material.map = tex;
+    floorMesh.material.needsUpdate = true;
+    if (oldMap) oldMap.dispose();
+  }
+}
 
 const camera = new THREE.PerspectiveCamera(75, innerWidth / innerHeight, 0.05, 300);
 const renderer = new THREE.WebGLRenderer({ antialias: true });
@@ -159,32 +250,17 @@ function box(x, z, w, d, h, color, rotY = 0) {
 
 // Zemin
 {
-  const c = document.createElement('canvas');
-  c.width = c.height = 256;
-  const ctx = c.getContext('2d');
-  ctx.fillStyle = '#9a8f72';
-  ctx.fillRect(0, 0, 256, 256);
-  ctx.strokeStyle = 'rgba(0,0,0,0.18)';
-  ctx.lineWidth = 2;
-  ctx.strokeRect(0, 0, 256, 256);
-  ctx.strokeStyle = 'rgba(255,255,255,0.06)';
-  for (let i = 0; i < 30; i++) {
-    ctx.beginPath();
-    ctx.moveTo(Math.random() * 256, Math.random() * 256);
-    ctx.lineTo(Math.random() * 256, Math.random() * 256);
-    ctx.stroke();
-  }
-  const tex = new THREE.CanvasTexture(c);
+  const tex = makeFloorTexture(ARENA_THEMES.depot);
   tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
   tex.repeat.set(15, 15);
-  const floor = new THREE.Mesh(
+  floorMesh = new THREE.Mesh(
     new THREE.PlaneGeometry(MAP_SIZE, MAP_SIZE),
     new THREE.MeshStandardMaterial({ map: tex, roughness: 1 })
   );
-  floor.rotation.x = -Math.PI / 2;
-  floor.receiveShadow = true;
-  scene.add(floor);
-  solids.push(floor);
+  floorMesh.rotation.x = -Math.PI / 2;
+  floorMesh.receiveShadow = true;
+  scene.add(floorMesh);
+  solids.push(floorMesh);
 }
 
 // Çevre duvarları
@@ -211,41 +287,138 @@ box(-18, -18, 2.5, 2.5, 1.2, 0xa56f31);
 box(24, 6, 1.4, 8, 2.8, 0x7d8a99);
 box(-24, -6, 1.4, 8, 2.8, 0x7d8a99);
 
+const arenaLayoutMeshes = [];
+const arenaLayoutColliders = [];
+
+function arenaBox(x, z, w, d, h, color, rotY = 0) {
+  const before = colliders.length;
+  const mesh = box(x, z, w, d, h, color, rotY);
+  arenaLayoutMeshes.push(mesh);
+  for (let i = before; i < colliders.length; i++) arenaLayoutColliders.push(colliders[i]);
+  return mesh;
+}
+
+function clearArenaLayout() {
+  for (const mesh of arenaLayoutMeshes.splice(0)) {
+    scene.remove(mesh);
+    const si = solids.indexOf(mesh);
+    if (si >= 0) solids.splice(si, 1);
+  }
+  for (const collider of arenaLayoutColliders.splice(0)) {
+    const ci = colliders.indexOf(collider);
+    if (ci >= 0) colliders.splice(ci, 1);
+  }
+}
+
+function sniperNest(x, z, sx, sz) {
+  arenaBox(x, z, 5.5, 1.0, 1.25, 0x6f7f91);
+  arenaBox(x + sx * 3.2, z, 1.0, 5.0, 1.9, 0x7d8a99);
+  arenaBox(x, z + sz * 3.2, 5.0, 1.0, 1.9, 0x7d8a99);
+  arenaBox(x - sx * 2.7, z - sz * 2.7, 2.0, 2.0, 1.2, 0xc2873e);
+}
+
+function applyArenaLayout(arena = 'depot') {
+  applyArenaTheme(arena);
+  clearArenaLayout();
+  if (arena === 'lanes') {
+    arenaBox(0, -18, 18, 1.2, 2.4, 0xb67c39);
+    arenaBox(0, 18, 18, 1.2, 2.4, 0xb67c39);
+    arenaBox(-18, 0, 1.2, 18, 2.4, 0xb67c39);
+    arenaBox(18, 0, 1.2, 18, 2.4, 0xb67c39);
+    arenaBox(-10, -10, 3, 3, 1.4, 0x8f5d2a);
+    arenaBox(10, 10, 3, 3, 1.4, 0x8f5d2a);
+    sniperNest(-24, 24, 1, -1);
+    sniperNest(24, -24, -1, 1);
+  } else if (arena === 'yard') {
+    arenaBox(0, 0, 4, 4, 1.4, 0x5d8f43);
+    arenaBox(-12, 0, 4, 2, 1.5, 0x5d8f43);
+    arenaBox(12, 0, 4, 2, 1.5, 0x5d8f43);
+    arenaBox(0, -12, 2, 4, 1.5, 0x5d8f43);
+    arenaBox(0, 12, 2, 4, 1.5, 0x5d8f43);
+    arenaBox(-18, 18, 6, 1.2, 1.7, 0x3d5c3a);
+    arenaBox(18, -18, 6, 1.2, 1.7, 0x3d5c3a);
+    sniperNest(-24, -24, 1, 1);
+    sniperNest(24, 24, -1, -1);
+  } else if (arena === 'crossfire') {
+    arenaBox(-11, -11, 12, 1.2, 2.2, 0x2f7fb5);
+    arenaBox(11, 11, 12, 1.2, 2.2, 0x2f7fb5);
+    arenaBox(-11, 11, 1.2, 12, 2.2, 0x8f3fb5);
+    arenaBox(11, -11, 1.2, 12, 2.2, 0x8f3fb5);
+    arenaBox(0, -18, 5, 2, 1.4, 0x26345f);
+    arenaBox(0, 18, 5, 2, 1.4, 0x26345f);
+    arenaBox(-18, 0, 2, 5, 1.4, 0x26345f);
+    arenaBox(18, 0, 2, 5, 1.4, 0x26345f);
+    sniperNest(-24, 24, 1, -1);
+    sniperNest(24, -24, -1, 1);
+  } else if (arena === 'fortress') {
+    arenaBox(0, -12, 10, 1.4, 3.0, 0x4c5664);
+    arenaBox(0, 12, 10, 1.4, 3.0, 0x4c5664);
+    arenaBox(-12, 0, 1.4, 10, 3.0, 0x4c5664);
+    arenaBox(12, 0, 1.4, 10, 3.0, 0x4c5664);
+    arenaBox(-5, -5, 2.5, 2.5, 1.2, 0x8b929c);
+    arenaBox(5, -5, 2.5, 2.5, 1.2, 0x8b929c);
+    arenaBox(-5, 5, 2.5, 2.5, 1.2, 0x8b929c);
+    arenaBox(5, 5, 2.5, 2.5, 1.2, 0x8b929c);
+    sniperNest(-24, -24, 1, 1);
+    sniperNest(24, 24, -1, -1);
+  } else {
+    arenaBox(-14, 14, 5, 2, 1.5, 0xc2873e);
+    arenaBox(14, -14, 5, 2, 1.5, 0xc2873e);
+    arenaBox(-14, 6, 2, 5, 1.5, 0xc2873e);
+    arenaBox(14, -6, 2, 5, 1.5, 0xc2873e);
+    sniperNest(-24, -24, 1, 1);
+    sniperNest(24, 24, -1, -1);
+  }
+}
+
 // ================== YEREL OYUNCU ==================
 const player = {
   pos: new THREE.Vector3(0, 0, 0), // ayak pozisyonu
   vel: new THREE.Vector3(),
   yaw: 0, pitch: 0,
   onGround: true,
+  crouch: false,
+  eyeHeight: STAND_EYE_HEIGHT,
   hp: 100,
   alive: true,
   gun: 'rifle',
   ammo: GUNS.rifle.mag,
   reloading: false,
+  reloadStart: 0,
   reloadEnd: 0,
   lastShot: 0,
   zoomed: false,
   kills: 0,
+  streak: 0,
 };
 
 const keys = {};
+const GAME_KEYS = new Set([
+  'KeyW', 'KeyA', 'KeyS', 'KeyD', 'Space', 'ShiftLeft', 'ShiftRight',
+  'KeyC', 'KeyR', 'KeyE',
+]);
+
 addEventListener('keydown', (e) => {
+  if (gameRunning && GAME_KEYS.has(e.code)) e.preventDefault();
   keys[e.code] = true;
   if (e.code === 'KeyR') tryReload();
   if (e.code === 'KeyE') tryPickupWeapon();
 });
-addEventListener('keyup', (e) => (keys[e.code] = false));
+addEventListener('keyup', (e) => {
+  if (gameRunning && GAME_KEYS.has(e.code)) e.preventDefault();
+  keys[e.code] = false;
+});
 
 // Fare / pointer lock
 let mouseDown = false;
 document.addEventListener('mousedown', (e) => {
   if (!gameRunning || document.pointerLockElement !== document.body) return;
+  e.preventDefault();
   if (e.button === 0) { mouseDown = true; tryShoot(); }
-  if (e.button === 2) toggleZoom(true);
+  if (e.button === 2) toggleZoom(!player.zoomed);
 });
 document.addEventListener('mouseup', (e) => {
   if (e.button === 0) mouseDown = false;
-  if (e.button === 2) toggleZoom(false);
 });
 document.addEventListener('contextmenu', (e) => e.preventDefault());
 
@@ -274,14 +447,24 @@ document.addEventListener('mousemove', (e) => {
   player.pitch = Math.max(-1.45, Math.min(1.45, player.pitch));
 });
 
+let resumeVisible = false;
+
+function showResume(title = 'DURAKLADI', sub = 'Oyuna donmek icin tikla') {
+  if (resumeVisible && $('resume').style.display === 'flex') return;
+  resumeVisible = true;
+  $('resume-title').textContent = title;
+  $('resume-sub').textContent = sub;
+  $('resume').style.display = 'flex';
+}
+
+function hideResume() {
+  resumeVisible = false;
+  $('resume').style.display = 'none';
+}
+
 document.addEventListener('pointerlockchange', () => {
-  if (gameRunning && document.pointerLockElement !== document.body) {
-    $('resume-title').textContent = 'DURAKLADI';
-    $('resume-sub').textContent = 'Oyuna dönmek için tıkla';
-    $('resume').style.display = 'flex';
-  } else {
-    $('resume').style.display = 'none';
-  }
+  if (gameRunning && document.pointerLockElement !== document.body) showResume();
+  else hideResume();
 });
 $('btn-resume').onclick = () => document.body.requestPointerLock();
 
@@ -299,6 +482,7 @@ const gunGroup = new THREE.Group();
 camera.add(gunGroup);
 scene.add(camera);
 let gunRecoil = 0;
+let screenShake = 0;
 
 // Her silaha özgü detaylı model (viewmodel + yerdeki silahlar aynı modeli kullanır)
 function makeGunMesh(type) {
@@ -379,18 +563,22 @@ flashSprite.position.set(0.28, -0.2, -1.05);
 camera.add(flashSprite);
 
 // ================== RAKİP MODELİ ==================
-let enemy = null; // {id, name, group, head, body, targetPos, targetYaw, hp, kills, alive}
+const enemies = new Map(); // id -> {id, name, group, head, body, targetPos, targetYaw, hp, kills, alive}
 
-function makeNameSprite(name) {
+function makeNameSprite(name, team = null) {
   const c = document.createElement('canvas');
   c.width = 256; c.height = 64;
   const ctx = c.getContext('2d');
   ctx.font = 'bold 34px Arial';
   ctx.textAlign = 'center';
-  ctx.fillStyle = 'rgba(0,0,0,0.55)';
+  const accent = team === 'police' ? '#6db3ff' : team === 'bandit' ? '#ff6b6b' : '#ffffff';
   const w = ctx.measureText(name).width + 24;
+  ctx.fillStyle = 'rgba(0,0,0,0.58)';
   ctx.fillRect(128 - w / 2, 8, w, 46);
-  ctx.fillStyle = '#fff';
+  ctx.strokeStyle = accent;
+  ctx.lineWidth = 3;
+  ctx.strokeRect(128 - w / 2, 8, w, 46);
+  ctx.fillStyle = accent;
   ctx.fillText(name, 128, 42);
   const tex = new THREE.CanvasTexture(c);
   const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, depthTest: false }));
@@ -409,23 +597,28 @@ function createEnemy(info) {
   body.position.y = 0.95;
   body.castShadow = true;
   body.userData.part = 'body';
+  body.userData.playerId = info.id;
 
   const armL = new THREE.Mesh(new THREE.BoxGeometry(0.18, 1.0, 0.18), bodyMat);
   armL.position.set(-0.5, 1.05, 0);
   armL.castShadow = true;
   armL.userData.part = 'body';
+  armL.userData.playerId = info.id;
   const armR = armL.clone();
   armR.position.x = 0.5;
+  armR.userData = { part: 'body', playerId: info.id };
 
   const legs = new THREE.Mesh(new THREE.BoxGeometry(0.7, 0.6, 0.4), new THREE.MeshStandardMaterial({ color: av.legs }));
   legs.position.y = 0.3;
   legs.castShadow = true;
   legs.userData.part = 'body';
+  legs.userData.playerId = info.id;
 
   const head = new THREE.Mesh(new THREE.BoxGeometry(0.42, 0.42, 0.42), skinMat);
   head.position.y = 1.82;
   head.castShadow = true;
   head.userData.part = 'head';
+  head.userData.playerId = info.id;
 
   // Gözler (ön yüz -z yönünde): beyaz + siyah göz bebeği
   const eyeW = new THREE.MeshBasicMaterial({ color: 0xffffff });
@@ -460,21 +653,46 @@ function createEnemy(info) {
   const gun = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.1, 0.7), new THREE.MeshStandardMaterial({ color: 0x222 }));
   gun.position.set(0.3, 1.3, -0.4);
 
-  group.add(body, armL, armR, legs, head, gun, makeNameSprite(info.name));
+  const nameTag = makeNameSprite(info.name, info.team);
+  group.add(body, armL, armR, legs, head, gun, nameTag);
   group.position.set(info.pos[0], info.pos[1], info.pos[2]);
   group.rotation.y = info.yaw || 0;
   scene.add(group);
 
-  return {
+  const enemy = {
     id: info.id, name: info.name, group, head, body, legs, armL, armR,
     targetPos: new THREE.Vector3(info.pos[0], info.pos[1], info.pos[2]),
     targetYaw: info.yaw || 0,
-    hp: info.hp, kills: info.kills || 0, alive: true, protUntil: 0,
+    hp: info.hp, kills: info.kills || 0, alive: info.hp > 0, protUntil: 0, crouch: !!info.crouch, nameTag, team: info.team || null,
   };
+  setEnemyCrouch(enemy, !!info.crouch);
+  enemies.set(info.id, enemy);
+  return enemy;
 }
 
-function removeEnemy() {
-  if (enemy) { scene.remove(enemy.group); enemy = null; }
+function setEnemyCrouch(enemy, crouch) {
+  enemy.crouch = crouch;
+  enemy.group.scale.y = crouch ? 0.72 : 1;
+}
+
+function removeEnemy(id) {
+  const enemy = enemies.get(id);
+  if (!enemy) return;
+  scene.remove(enemy.group);
+  enemies.delete(id);
+}
+
+function removeAllEnemies() {
+  for (const id of [...enemies.keys()]) removeEnemy(id);
+}
+
+function enemyById(id) {
+  return enemies.get(id) || null;
+}
+
+function nameById(id) {
+  if (id === socket.id) return myName;
+  return enemyById(id)?.name || 'Rakip';
 }
 
 // ================== YERDEKİ NESNELER ==================
@@ -681,12 +899,14 @@ function tryShoot() {
   player.lastShot = now;
   player.ammo--;
   updateAmmoHUD();
+  if (player.ammo === 0) setTimeout(() => tryReload(), 120);
   playShotSound(player.gun);
   flash.intensity = 4;
   flashSprite.material.rotation = Math.random() * Math.PI * 2;
   flashSprite.material.opacity = 1;
   flashSprite.scale.setScalar(0.3 + Math.random() * 0.15 + (g.pellets > 1 ? 0.2 : 0));
   gunRecoil = 1;
+  screenShake = Math.max(screenShake, player.gun === 'sniper' ? 1.1 : player.gun === 'shotgun' ? 0.8 : 0.35);
   ejectShell();
   // Geri tepme: silaha göre dikey tekme + hafif rastgele yatay sapma
   player.pitch += g.kick * (0.8 + Math.random() * 0.4);
@@ -695,10 +915,12 @@ function tryShoot() {
   const origin = camera.getWorldPosition(new THREE.Vector3());
   const baseDir = new THREE.Vector3(0, 0, -1).applyQuaternion(camera.quaternion);
   const muzzle = gunGroup.localToWorld(new THREE.Vector3(0, 0.02, -0.7));
-  const enemyProtected = enemy && enemy.protUntil > Date.now();
 
   const targets = [...solids];
-  if (enemy && enemy.alive) targets.push(enemy.head, enemy.body, enemy.legs, enemy.armL, enemy.armR);
+  for (const e of enemies.values()) {
+    if (gameMode === 'team' && e.team && e.team === myTeam) continue;
+    if (e.alive) targets.push(e.head, e.body, e.legs, e.armL, e.armR);
+  }
 
   const tos = [];
   let hitHead = false, hitAny = false;
@@ -721,8 +943,10 @@ function tryShoot() {
       endPoint = hits[0].point;
       const part = hits[0].object.userData.part;
       if (part) {
-        socket.emit('hit', { part, gun: player.gun });
-        if (!enemyProtected) {
+        const targetId = hits[0].object.userData.playerId;
+        const target = enemyById(targetId);
+        socket.emit('hit', { part, gun: player.gun, targetId });
+        if (!target || target.protUntil <= Date.now()) {
           hitAny = true;
           if (part === 'head') hitHead = true;
         }
@@ -746,6 +970,7 @@ function showHitmarker(head) {
   const hm = $('hitmarker');
   hm.classList.toggle('head', head);
   hm.style.opacity = 1;
+  if (head) centerBanner('KAFADAN!', 'red', 700);
   clearTimeout(hm._timer);
   hm._timer = setTimeout(() => (hm.style.opacity = 0), 120);
 }
@@ -755,8 +980,13 @@ function tryReload() {
   const g = GUNS[player.gun];
   if (player.ammo >= g.mag) return;
   player.reloading = true;
-  player.reloadEnd = performance.now() + g.reloadTime * 1000;
+  player.reloadStart = performance.now();
+  player.reloadEnd = player.reloadStart + g.reloadTime * 1000;
   $('reloadtext').textContent = 'ŞARJÖR DEĞİŞİYOR...';
+  $('reloadtext').textContent = 'SARJOR DEGISTIRILIYOR';
+  $('reloadbar-bg').style.display = 'block';
+  $('reloadbar').style.width = '0%';
+  centerBanner('RELOAD', 'gold', 650);
   playBlip(350, 0.1, 0.15);
   socket.emit('reloading');
 }
@@ -765,8 +995,11 @@ function finishReload() {
   player.reloading = false;
   player.ammo = GUNS[player.gun].mag;
   $('reloadtext').textContent = '';
+  $('reloadbar-bg').style.display = 'none';
+  $('reloadbar').style.width = '0%';
   updateAmmoHUD();
   playBlip(520, 0.08, 0.15);
+  centerBanner('HAZIR', 'blue', 650);
 }
 
 function switchGun(type) {
@@ -774,6 +1007,8 @@ function switchGun(type) {
   player.ammo = GUNS[type].mag;
   player.reloading = false;
   $('reloadtext').textContent = '';
+  $('reloadbar-bg').style.display = 'none';
+  $('reloadbar').style.width = '0%';
   toggleZoom(false);
   buildGunModel(type);
   $('weaponname').textContent = GUNS[type].name;
@@ -830,10 +1065,19 @@ function updateAmmoHUD() {
   $('ammo').innerHTML = `${player.ammo} <small>/ ${GUNS[player.gun].mag}</small>`;
 }
 function updateScoreHUD() {
+  if (gameMode === 'team') {
+    $('score-me').textContent = teamScores.police || 0;
+    $('score-en').textContent = teamScores.bandit || 0;
+    $('score-me-name').textContent = `Polis R${currentRound}`;
+    $('score-en-name').textContent = 'Haydut';
+    return;
+  }
   $('score-me').textContent = player.kills;
-  $('score-en').textContent = enemy ? enemy.kills : 0;
+  const others = [...enemies.values()].sort((a, b) => b.kills - a.kills);
+  const leader = others[0] || null;
+  $('score-en').textContent = leader ? leader.kills : 0;
   $('score-me-name').textContent = myName;
-  $('score-en-name').textContent = enemy ? enemy.name : 'Rakip';
+  $('score-en-name').textContent = leader ? leader.name : 'Rakip';
 }
 function killFeed(text) {
   const div = document.createElement('div');
@@ -850,8 +1094,13 @@ function damageFlash() {
 }
 
 // ================== SOKET OLAYLARI ==================
-socket.on('start', ({ players, weapons }) => {
-  removeEnemy();
+socket.on('start', ({ players, weapons, arena, mode, round, teamScores: scores }) => {
+  gameMode = mode || gameMode;
+  currentRound = round || currentRound;
+  teamScores = scores || teamScores;
+  arenaChoice = arena || arenaChoice;
+  applyArenaLayout(arenaChoice);
+  removeAllEnemies();
   for (const w of [...groundWeapons.values()]) scene.remove(w.mesh);
   groundWeapons.clear();
   for (const p of [...healthPacks.values()]) scene.remove(p.mesh);
@@ -863,11 +1112,14 @@ socket.on('start', ({ players, weapons }) => {
       player.yaw = info.yaw;
       player.pitch = 0;
       player.hp = info.hp;
-      player.alive = true;
+      player.alive = info.hp > 0;
       player.kills = info.kills;
+      myTeam = info.team || null;
+      player.crouch = false;
+      player.eyeHeight = STAND_EYE_HEIGHT;
       switchGun('rifle');
     } else {
-      enemy = createEnemy(info);
+      createEnemy(info);
     }
   }
   for (const w of weapons) spawnGroundWeapon(w);
@@ -879,20 +1131,20 @@ socket.on('start', ({ players, weapons }) => {
   $('roomtag-code').textContent = roomCode;
   gameRunning = true;
   updateHpHUD(); updateAmmoHUD(); updateScoreHUD();
-  toast('Rakip geldi! Savaş başladı!');
+  toast(gameMode === 'team' ? `Round ${currentRound}: Polis vs Haydut` : (gameMode === 'arena' ? 'Arena basladi!' : 'Rakip geldi! Savas basladi!'));
   // Pointer lock yalnızca gerçek bir kullanıcı tıklamasından sonra açılabilir
   // (tarayıcı kısıtı). Otomatik açmaya çalışmak sessizce reddedilir ve oyuncu
   // donar. Bu yüzden "tıkla ve başla" ekranını gösteriyoruz; kilit btn-resume
   // tıklamasıyla açılır.
-  $('resume-title').textContent = 'SAVAŞ BAŞLADI';
-  $('resume-sub').textContent = 'Oyuna girmek için tıkla';
-  $('resume').style.display = 'flex';
+  showResume('SAVAS BASLADI', 'Oyuna girmek icin tikla');
 });
 
 socket.on('enemyMove', (d) => {
+  const enemy = enemyById(d.id);
   if (!enemy) return;
   enemy.targetPos.set(d.p[0], d.p[1], d.p[2]);
   enemy.targetYaw = d.y;
+  setEnemyCrouch(enemy, !!d.c);
 });
 
 socket.on('enemyShoot', ({ from, to, tos, gun }) => {
@@ -914,25 +1166,36 @@ socket.on('health', ({ id, hp, part }) => {
     player.hp = hp;
     updateHpHUD();
     if (dropped > 0) { damageFlash(); playBlip(150, 0.12, 0.3); }
-  } else if (enemy && enemy.id === id) {
-    enemy.hp = hp;
+  } else {
+    const enemy = enemyById(id);
+    if (enemy) enemy.hp = hp;
   }
 });
 
 socket.on('death', ({ victim, killer, headshot, scores }) => {
-  if (enemy) enemy.kills = scores[enemy.id] ?? enemy.kills;
+  for (const enemy of enemies.values()) enemy.kills = scores[enemy.id] ?? enemy.kills;
   player.kills = scores[socket.id] ?? player.kills;
   updateScoreHUD();
+  if (killer === socket.id && victim !== socket.id) {
+    player.streak++;
+    if (player.streak >= 3) centerBanner(`${player.streak} SERI!`, 'gold', 1100);
+  }
 
-  const killerName = killer === socket.id ? myName : (enemy ? enemy.name : 'Rakip');
-  const victimName = victim === socket.id ? myName : (enemy ? enemy.name : 'Rakip');
+  const killerName = nameById(killer);
+  const victimName = nameById(victim);
   killFeed(`${killerName} ${headshot ? '🎯 (KAFADAN)' : '💀'} ${victimName}`);
 
   if (victim === socket.id) {
+    player.streak = 0;
     player.alive = false;
     player.hp = 0;
     updateHpHUD();
     $('death-overlay').style.display = 'flex';
+    if (gameMode === 'team') {
+      $('respawn-count').textContent = '';
+      $('death-overlay').querySelector('p').textContent = 'Round bitene kadar bekliyorsun...';
+      return;
+    }
     let cnt = 3;
     $('respawn-count').textContent = cnt;
     const iv = setInterval(() => {
@@ -940,7 +1203,9 @@ socket.on('death', ({ victim, killer, headshot, scores }) => {
       if (cnt <= 0) clearInterval(iv);
       else $('respawn-count').textContent = cnt;
     }, 1000);
-  } else if (enemy && enemy.id === victim) {
+  } else {
+    const enemy = enemyById(victim);
+    if (!enemy) return;
     enemy.alive = false;
     enemy.group.rotation.x = -Math.PI / 2; // yere yat
     enemy.group.position.y = 0.3;
@@ -954,6 +1219,8 @@ socket.on('respawn', ({ id, pos, yaw, hp, prot }) => {
     player.yaw = yaw || 0;
     player.pitch = 0;
     player.vel.set(0, 0, 0);
+    player.crouch = false;
+    player.eyeHeight = STAND_EYE_HEIGHT;
     player.hp = hp;
     player.alive = true;
     switchGun(player.gun); // şarjörü doldur
@@ -965,14 +1232,59 @@ socket.on('respawn', ({ id, pos, yaw, hp, prot }) => {
       clearTimeout(ph._timer);
       ph._timer = setTimeout(() => (ph.style.display = 'none'), prot);
     }
-  } else if (enemy && enemy.id === id) {
+  } else {
+    const enemy = enemyById(id);
+    if (!enemy) return;
     enemy.alive = true;
     enemy.hp = hp;
     enemy.group.rotation.x = 0;
     enemy.group.position.set(pos[0], pos[1], pos[2]);
     enemy.targetPos.set(pos[0], pos[1], pos[2]);
     enemy.protUntil = Date.now() + (prot || 0); // korumalıyken model yanıp söner
+    setEnemyCrouch(enemy, false);
   }
+});
+
+socket.on('roundEnd', ({ winner, teamScores: scores, nextRoundIn }) => {
+  teamScores = scores || teamScores;
+  updateScoreHUD();
+  const name = winner === 'police' ? 'Polis' : 'Haydut';
+  centerBanner(`${name.toUpperCase()} KAZANDI`, winner === 'police' ? 'blue' : 'red', nextRoundIn || 3500);
+  toast(`${name} round kazandi!`, nextRoundIn || 3500);
+});
+
+socket.on('roundStart', ({ players, weapons, round, teamScores: scores }) => {
+  currentRound = round || currentRound + 1;
+  teamScores = scores || teamScores;
+  for (const w of [...groundWeapons.values()]) scene.remove(w.mesh);
+  groundWeapons.clear();
+  for (const p of [...healthPacks.values()]) scene.remove(p.mesh);
+  healthPacks.clear();
+  removeAllEnemies();
+  for (const info of players) {
+    if (info.id === socket.id) {
+      player.pos.set(info.pos[0], info.pos[1], info.pos[2]);
+      player.yaw = info.yaw || 0;
+      player.pitch = 0;
+      player.vel.set(0, 0, 0);
+      player.hp = info.hp;
+      player.alive = info.hp > 0;
+      player.crouch = false;
+      player.eyeHeight = STAND_EYE_HEIGHT;
+      myTeam = info.team || myTeam;
+      switchGun('rifle');
+      $('death-overlay').style.display = 'none';
+      $('death-overlay').querySelector('p').innerHTML = '<span id="respawn-count">3</span> saniye sonra yeniden dogacaksin...';
+      updateHpHUD();
+    } else {
+      createEnemy(info);
+    }
+  }
+  for (const w of weapons) spawnGroundWeapon(w);
+  updateAmmoHUD();
+  updateScoreHUD();
+  centerBanner(`ROUND ${currentRound}`, 'gold', 1000);
+  toast(`Round ${currentRound} basladi!`);
 });
 
 socket.on('healthSpawn', ({ id, pos }) => {
@@ -989,8 +1301,9 @@ socket.on('healthTaken', ({ id, by, hp }) => {
     updateHpHUD();
     toast('+40 CAN 💚');
     playBlip(900, 0.12, 0.2);
-  } else if (enemy) {
-    enemy.hp = hp;
+  } else {
+    const enemy = enemyById(by);
+    if (enemy) enemy.hp = hp;
   }
 });
 
@@ -999,6 +1312,7 @@ socket.on('weaponTaken', ({ id, by, type }) => {
   if (w) { scene.remove(w.mesh); groundWeapons.delete(id); }
   if (by === socket.id) {
     switchGun(type);
+    centerBanner(type === 'sniper' ? 'AWP ALINDI' : GUNS[type].name, type === 'sniper' ? 'gold' : 'blue', 1000);
     toast(`${GUNS[type].name} aldın!`);
     playBlip(650, 0.1, 0.2);
   }
@@ -1008,12 +1322,24 @@ socket.on('weaponSpawn', (w) => {
   spawnGroundWeapon(w);
 });
 
+socket.on('playerJoined', (info) => {
+  if (info.id !== socket.id && !enemyById(info.id)) createEnemy(info);
+  toast(`${info.name} arenaya katildi.`);
+  updateScoreHUD();
+});
+
+socket.on('playerLeft', ({ id, name }) => {
+  removeEnemy(id);
+  toast(`${name} oyundan ayrildi.`);
+  updateScoreHUD();
+});
+
 socket.on('opponentLeft', ({ name }) => {
   gameRunning = false;
-  removeEnemy();
+  removeAllEnemies();
   document.exitPointerLock();
   $('hud').style.display = 'none';
-  $('resume').style.display = 'none';
+  hideResume();
   $('waiting').style.display = 'flex';
   $('code-display').textContent = roomCode;
   $('waiting-hint').textContent = `${name} oyundan ayrıldı. Yeni rakip bekleniyor...`;
@@ -1025,12 +1351,32 @@ socket.on('disconnect', () => {
 
 // ================== ANA DÖNGÜ ==================
 let lastSend = 0;
+let fpsFrames = 0;
+let fpsLast = performance.now();
+let lastPingCheck = 0;
 const clock = new THREE.Clock();
+
+function updateNetStats(now) {
+  fpsFrames++;
+  if (now - fpsLast >= 1000) {
+    $('fps-val').textContent = Math.round((fpsFrames * 1000) / (now - fpsLast));
+    fpsFrames = 0;
+    fpsLast = now;
+  }
+  if (socket.connected && now - lastPingCheck >= 2000) {
+    lastPingCheck = now;
+    const sent = performance.now();
+    socket.timeout(1500).emit('pingCheck', () => {
+      $('ping-val').textContent = Math.round(performance.now() - sent);
+    });
+  }
+}
 
 function animate() {
   requestAnimationFrame(animate);
   const dt = Math.min(clock.getDelta(), 0.05);
   const now = performance.now();
+  updateNetStats(now);
 
   if (gameRunning) {
     // --- Hareket ---
@@ -1042,7 +1388,9 @@ function animate() {
       if (keys['KeyS']) move.sub(fwd);
       if (keys['KeyD']) move.add(right);
       if (keys['KeyA']) move.sub(right);
-      if (move.lengthSq() > 0) move.normalize().multiplyScalar(MOVE_SPEED);
+      player.crouch = !!(keys['ShiftLeft'] || keys['ShiftRight'] || keys['KeyC']);
+      const speed = player.crouch ? CROUCH_SPEED : MOVE_SPEED;
+      if (move.lengthSq() > 0) move.normalize().multiplyScalar(speed);
 
       player.pos.x += move.x * dt;
       player.pos.z += move.z * dt;
@@ -1059,7 +1407,7 @@ function animate() {
       } else {
         player.onGround = player.pos.y - ground < 0.05;
       }
-      if (keys['Space'] && player.onGround) {
+      if (keys['Space'] && player.onGround && !player.crouch) {
         player.vel.y = JUMP_VEL;
         player.onGround = false;
       }
@@ -1069,25 +1417,45 @@ function animate() {
     }
 
     // Şarjör bitti mi
-    if (player.reloading && now >= player.reloadEnd) finishReload();
+    if (player.reloading) {
+      const total = Math.max(1, player.reloadEnd - player.reloadStart);
+      const prog = Math.max(0, Math.min(1, (now - player.reloadStart) / total));
+      $('reloadbar').style.width = `${Math.round(prog * 100)}%`;
+      if (now >= player.reloadEnd) finishReload();
+    }
 
     // Kamera
-    camera.position.set(player.pos.x, player.pos.y + EYE_HEIGHT, player.pos.z);
+    const targetEye = player.crouch ? CROUCH_EYE_HEIGHT : STAND_EYE_HEIGHT;
+    player.eyeHeight += (targetEye - player.eyeHeight) * Math.min(1, dt * 14);
+    camera.position.set(player.pos.x, player.pos.y + player.eyeHeight, player.pos.z);
     camera.rotation.order = 'YXZ';
     camera.rotation.y = player.yaw;
     camera.rotation.x = player.pitch;
+    if (screenShake > 0) {
+      const s = screenShake * 0.004;
+      camera.rotation.z = (Math.random() - 0.5) * s;
+      camera.rotation.x += (Math.random() - 0.5) * s;
+      screenShake = Math.max(0, screenShake - dt * 7);
+    } else {
+      camera.rotation.z = 0;
+    }
 
     // Silah animasyonu (geri tepme + sallanma)
     gunRecoil = Math.max(0, gunRecoil - dt * 8);
     const bob = Math.sin(now * 0.012) * 0.006 * (keys['KeyW'] || keys['KeyS'] || keys['KeyA'] || keys['KeyD'] ? 1 : 0.2);
-    gunGroup.position.z = -0.5 + gunRecoil * 0.12;
-    gunGroup.position.y = -0.24 + bob + (player.reloading ? -0.15 : 0);
-    gunGroup.rotation.x = gunRecoil * 0.15 + (player.reloading ? 0.4 : 0);
+    const reloadProg = player.reloading
+      ? Math.max(0, Math.min(1, (now - player.reloadStart) / Math.max(1, player.reloadEnd - player.reloadStart)))
+      : 0;
+    const reloadDip = player.reloading ? Math.sin(reloadProg * Math.PI) : 0;
+    gunGroup.position.z = -0.5 + gunRecoil * 0.12 + reloadDip * 0.08;
+    gunGroup.position.y = -0.24 + bob - reloadDip * 0.22;
+    gunGroup.rotation.x = gunRecoil * 0.15 + reloadDip * 0.65;
+    gunGroup.rotation.z = player.reloading ? Math.sin(reloadProg * Math.PI * 2) * 0.18 : 0;
     flash.intensity = Math.max(0, flash.intensity - dt * 30);
     flashSprite.material.opacity = Math.max(0, flashSprite.material.opacity - dt * 20);
 
     // Rakip yumuşatma
-    if (enemy) {
+    for (const enemy of enemies.values()) {
       enemy.group.position.lerp(enemy.targetPos, Math.min(1, dt * 14));
       if (enemy.alive) {
         let dy = enemy.targetYaw - enemy.group.rotation.y;
@@ -1121,6 +1489,7 @@ function animate() {
       socket.volatile.emit('move', {
         p: [+player.pos.x.toFixed(2), +player.pos.y.toFixed(2), +player.pos.z.toFixed(2)],
         y: +player.yaw.toFixed(3),
+        c: player.crouch,
       });
     }
   }

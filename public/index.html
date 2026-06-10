@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>CS Duel - 1v1</title>
+<title>CS Duel - Duel / Arena</title>
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
   html, body { width: 100%; height: 100%; overflow: hidden; background: #111; font-family: 'Segoe UI', Arial, sans-serif; }
@@ -15,38 +15,38 @@
   }
   .panel {
     background: #1a1f2b; border: 1px solid #2e3a52; border-radius: 12px;
-    padding: 36px 44px; width: 420px; max-width: 92vw; text-align: center;
+    padding: 22px 28px; width: 460px; max-width: 94vw; max-height: 94vh; overflow-y: auto; text-align: center;
     box-shadow: 0 20px 60px rgba(0,0,0,0.6);
   }
-  .panel h1 { font-size: 32px; letter-spacing: 2px; margin-bottom: 6px; color: #ffb13d; }
-  .panel .sub { color: #8b97ad; font-size: 13px; margin-bottom: 24px; }
+  .panel h1 { font-size: 28px; letter-spacing: 2px; margin-bottom: 4px; color: #ffb13d; }
+  .panel .sub { color: #8b97ad; font-size: 12px; margin-bottom: 14px; }
   .panel input {
-    width: 100%; padding: 12px 14px; margin-bottom: 12px; border-radius: 8px;
+    width: 100%; padding: 10px 12px; margin-bottom: 9px; border-radius: 8px;
     border: 1px solid #38445e; background: #10141d; color: #fff; font-size: 16px; outline: none;
   }
   .panel input:focus { border-color: #ffb13d; }
   .panel button {
-    width: 100%; padding: 13px; margin-top: 6px; border: none; border-radius: 8px;
+    width: 100%; padding: 11px; margin-top: 5px; border: none; border-radius: 8px;
     font-size: 16px; font-weight: 700; cursor: pointer; transition: transform .08s, filter .15s;
   }
   .panel button:hover { filter: brightness(1.15); }
   .panel button:active { transform: scale(0.98); }
   .btn-create { background: #ffb13d; color: #1a1300; }
   .btn-join { background: #3d6dff; color: #fff; }
-  .divider { display: flex; align-items: center; gap: 10px; margin: 18px 0 12px; color: #56627d; font-size: 12px; }
+  .divider { display: flex; align-items: center; gap: 10px; margin: 12px 0 9px; color: #56627d; font-size: 12px; }
   .divider::before, .divider::after { content: ''; flex: 1; height: 1px; background: #2e3a52; }
   .err { color: #ff6b6b; font-size: 14px; min-height: 18px; margin-top: 10px; }
 
   /* Avatar secici */
-  .section-label { text-align: left; font-size: 11px; letter-spacing: 1px; color: #56627d; margin: 4px 0 6px; }
-  .avatars { display: flex; gap: 8px; margin-bottom: 14px; }
+  .section-label { text-align: left; font-size: 10px; letter-spacing: 1px; color: #56627d; margin: 2px 0 5px; }
+  .avatars { display: flex; gap: 7px; margin-bottom: 10px; }
   .avatar-card {
     flex: 1; background: #10141d; border: 2px solid #2e3a52; border-radius: 10px;
-    padding: 10px 4px 7px; cursor: pointer; transition: border-color .15s, transform .1s, background .15s;
+    padding: 7px 4px 5px; cursor: pointer; transition: border-color .15s, transform .1s, background .15s;
   }
   .avatar-card:hover { transform: translateY(-2px); }
   .avatar-card.sel { border-color: #ffb13d; background: #1c2230; }
-  .avatar-card span { display: block; font-size: 11px; color: #aab6cc; margin-top: 6px; }
+  .avatar-card span { display: block; font-size: 10px; color: #aab6cc; margin-top: 4px; }
   .av-head { width: 24px; height: 24px; margin: 0 auto; border-radius: 4px; position: relative; }
   .av-gear { position: absolute; left: -1px; right: -1px; height: 7px; top: -3px; border-radius: 3px; }
   .av-eye { position: absolute; top: 9px; width: 6px; height: 6px; background: #fff; border-radius: 50%; }
@@ -55,9 +55,19 @@
   .av-body { width: 32px; height: 16px; margin: 2px auto 0; border-radius: 3px; }
 
   /* Hassasiyet kaydiricisi */
-  .sens-row { display: flex; align-items: center; gap: 10px; margin: 2px 0 12px; color: #8b97ad; font-size: 13px; }
+  .sens-row { display: flex; align-items: center; gap: 10px; margin: 2px 0 9px; color: #8b97ad; font-size: 13px; }
   .sens-row input[type=range] { flex: 1; accent-color: #ffb13d; cursor: pointer; }
   .sens-row b { color: #ffb13d; min-width: 36px; text-align: right; font-size: 13px; }
+
+  .mode-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(118px, 1fr)); gap: 7px; margin-bottom: 10px; }
+  .mode-card {
+    background: #10141d; border: 2px solid #2e3a52; border-radius: 10px;
+    padding: 7px 8px; cursor: pointer; color: #aab6cc; text-align: left;
+  }
+  .mode-card.sel { border-color: #ffb13d; background: #1c2230; }
+  .mode-card strong { display: block; color: #fff; font-size: 12px; margin-bottom: 2px; }
+  .mode-card span { display: block; font-size: 10px; color: #8b97ad; line-height: 1.2; }
+  .map-row { grid-template-columns: repeat(auto-fit, minmax(82px, 1fr)); }
 
   #waiting .code-box {
     font-size: 42px; letter-spacing: 10px; font-weight: 800; color: #ffb13d;
@@ -106,6 +116,8 @@
   #ammo { font-size: 40px; font-weight: 800; }
   #ammo small { font-size: 18px; color: #9aa7bf; }
   #reloadtext { color: #ffb13d; font-size: 14px; min-height: 18px; font-weight: 700; }
+  #reloadbar-bg { width: 160px; height: 5px; margin-left: auto; margin-top: 5px; background: rgba(255,255,255,0.14); border-radius: 4px; overflow: hidden; display: none; }
+  #reloadbar { height: 100%; width: 0%; background: linear-gradient(90deg, #ffb13d, #fff0a6); transition: width .05s linear; }
 
   #score {
     position: absolute; top: 16px; left: 50%; transform: translateX(-50%);
@@ -117,6 +129,7 @@
 
   #roomtag { position: absolute; top: 16px; right: 16px; background: rgba(0,0,0,0.45); padding: 6px 12px; border-radius: 6px; font-size: 13px; color: #8b97ad; }
   #roomtag b { color: #ffb13d; letter-spacing: 2px; }
+  #netstats { position: absolute; top: 16px; left: 16px; background: rgba(0,0,0,0.45); padding: 6px 12px; border-radius: 6px; font-size: 13px; color: #b8c4d8; font-weight: 700; }
 
   #killfeed { position: absolute; top: 64px; right: 16px; display: flex; flex-direction: column; gap: 6px; align-items: flex-end; }
   .feed-item {
@@ -151,6 +164,19 @@
     border: 1px solid rgba(255,177,61,0.4);
   }
 
+  #center-banner {
+    position: absolute; left: 50%; top: 22%; transform: translate(-50%, -16px) scale(0.96);
+    min-width: 240px; max-width: 80vw; text-align: center; pointer-events: none;
+    background: rgba(0,0,0,0.62); border: 1px solid rgba(255,255,255,0.18);
+    padding: 14px 24px; border-radius: 10px; opacity: 0;
+    font-size: 24px; font-weight: 900; letter-spacing: 1px; text-shadow: 0 2px 8px #000;
+    transition: opacity .16s ease, transform .16s ease; color: #fff;
+  }
+  #center-banner.show { opacity: 1; transform: translate(-50%, 0) scale(1); }
+  #center-banner.gold { color: #ffd36d; border-color: rgba(255,177,61,0.65); }
+  #center-banner.blue { color: #7bb7ff; border-color: rgba(109,179,255,0.65); }
+  #center-banner.red { color: #ff7474; border-color: rgba(255,107,107,0.65); }
+
   #prot-hint {
     position: absolute; left: 50%; top: 34%; transform: translateX(-50%);
     background: rgba(30,90,160,0.55); border: 1px solid rgba(120,190,255,0.6);
@@ -159,6 +185,16 @@
   }
 
   #help { position: absolute; bottom: 24px; left: 50%; transform: translateX(-50%); color: rgba(255,255,255,0.45); font-size: 12px; text-align: center; }
+
+  @media (max-height: 760px) {
+    .overlay { align-items: flex-start; padding: 10px 0; overflow-y: auto; }
+    .panel { padding: 16px 22px; max-height: none; }
+    .panel h1 { font-size: 24px; }
+    .panel .sub { margin-bottom: 10px; }
+    .av-head { width: 20px; height: 20px; }
+    .av-body { width: 28px; height: 12px; }
+    .mode-card span { display: none; }
+  }
 </style>
 </head>
 <body>
@@ -167,7 +203,7 @@
 <div class="overlay" id="menu">
   <div class="panel">
     <h1>CS DUEL</h1>
-    <div class="sub">1v1 — Kafadan tek atar. Gövde 33 hasar.</div>
+    <div class="sub">Duel veya 8 kisiye kadar arena modu.</div>
     <input id="name-input" maxlength="16" placeholder="Takma adın" autocomplete="off">
     <div class="section-label">KARAKTERİNİ SEÇ</div>
     <div class="avatars" id="avatars">
@@ -189,6 +225,20 @@
       </div>
     </div>
     <div class="sens-row"><span>🖱️ Hassasiyet</span><input type="range" id="sens-slider" min="0.2" max="3" step="0.05" value="1"><b id="sens-val">1.00</b></div>
+    <div class="section-label">OYUN MODU</div>
+    <div class="mode-row" id="mode-row">
+      <div class="mode-card sel" data-mode="duel"><strong>Duel</strong><span>2 kisilik klasik oda</span></div>
+      <div class="mode-card" data-mode="arena"><strong>Arena</strong><span>2-8 kisi, sonradan katilma</span></div>
+      <div class="mode-card" data-mode="team"><strong>Takim</strong><span>Polis vs Haydut round</span></div>
+    </div>
+    <div class="section-label">ARENA</div>
+    <div class="mode-row map-row" id="arena-row">
+      <div class="mode-card sel" data-arena="depot"><strong>Depo</strong><span>Dengeli siper</span></div>
+      <div class="mode-card" data-arena="lanes"><strong>Koridor</strong><span>Uzun hatlar</span></div>
+      <div class="mode-card" data-arena="fortress"><strong>Kale</strong><span>Merkez savunma</span></div>
+      <div class="mode-card" data-arena="yard"><strong>Avlu</strong><span>Acik catisma</span></div>
+      <div class="mode-card" data-arena="crossfire"><strong>Capraz</strong><span>Capraz siper</span></div>
+    </div>
     <button class="btn-create" id="btn-create">ODA KUR</button>
     <div class="divider">veya arkadaşının odasına katıl</div>
     <input id="code-input" maxlength="5" placeholder="ODA KODU" style="text-transform:uppercase; text-align:center; letter-spacing:6px; font-weight:700;" autocomplete="off">
@@ -224,6 +274,7 @@
   <div id="crosshair"></div>
   <div id="hitmarker"><span></span><span></span><span></span><span></span></div>
   <div id="score"><span class="me" id="score-me-name">Sen</span> <span id="score-me">0</span> &nbsp;—&nbsp; <span id="score-en">0</span> <span class="en" id="score-en-name">Rakip</span></div>
+  <div id="netstats">FPS <span id="fps-val">--</span> &nbsp; PING <span id="ping-val">--</span>ms</div>
   <div id="roomtag">ODA <b id="roomtag-code"></b></div>
   <div id="killfeed"></div>
   <div id="hpwrap">
@@ -234,6 +285,7 @@
     <div id="weaponname">AK-47</div>
     <div id="ammo">30 <small>/ 30</small></div>
     <div id="reloadtext"></div>
+    <div id="reloadbar-bg"><div id="reloadbar"></div></div>
   </div>
   <div id="pickup-hint"><b>[E]</b> <span id="pickup-name"></span> al</div>
   <div id="death-overlay">
@@ -241,8 +293,9 @@
     <p><span id="respawn-count">3</span> saniye sonra yeniden doğacaksın...</p>
   </div>
   <div id="prot-hint">🛡️ DOĞUM KORUMASI</div>
+  <div id="center-banner"></div>
   <div id="toast"></div>
-  <div id="help">WASD: hareket &nbsp;•&nbsp; SPACE: zıpla &nbsp;•&nbsp; SOL TIK: ateş &nbsp;•&nbsp; SAĞ TIK: nişan (sniper) &nbsp;•&nbsp; R: şarjör &nbsp;•&nbsp; E: silah al</div>
+  <div id="help">WASD: hareket &nbsp;•&nbsp; SHIFT/C: egil &nbsp;•&nbsp; SPACE: zipla &nbsp;•&nbsp; SOL TIK: ates &nbsp;•&nbsp; SAG TIK: AWP zoom ac/kapat &nbsp;•&nbsp; R: sarjor &nbsp;•&nbsp; E: silah al &nbsp;•&nbsp; ESC: duraklat</div>
 </div>
 
 <script src="/socket.io/socket.io.js"></script>
