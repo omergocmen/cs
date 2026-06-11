@@ -27,6 +27,13 @@ const GUNS = {
     snd: { freq: 500, dur: 0.42, vol: 0.7, thump: 55 },
     color: 0x2e5e2e,
   },
+  // Kilic: yakin dovus (melee). Mermi/sarjor yok, sol tik ile savrulur.
+  sword: {
+    name: 'Kılıç', mag: 1, fireDelay: 480, reloadTime: 0, auto: false,
+    spread: 0, zoom: false, pellets: 0, kick: 0, melee: true, range: 2.8,
+    snd: { freq: 300, dur: 0.12, vol: 0.25, thump: 0 },
+    color: 0xd7dde6,
+  },
 };
 
 // ================== AVATARLAR ==================
@@ -58,10 +65,107 @@ let arenaChoice = localStorage.getItem('cs_arena') || 'depot';
 let myTeam = null;
 let currentRound = 1;
 let teamScores = { police: 0, bandit: 0 };
+let ffaWins = {}; // kilic modu: id -> round galibiyeti
 let myAvatar = localStorage.getItem('cs_avatar') || 'komando';
 if (!AVATARS[myAvatar]) myAvatar = 'komando';
-if (!['duel', 'arena', 'team'].includes(gameMode)) gameMode = 'duel';
+if (!['duel', 'arena', 'team', 'gungame', 'domination', 'kilic'].includes(gameMode)) gameMode = 'duel';
 if (!['depot', 'lanes', 'fortress', 'yard', 'crossfire'].includes(arenaChoice)) arenaChoice = 'depot';
+
+// Takim tabanli modlar (takim secimi + dost atesi kapali)
+const isTeamMode = () => gameMode === 'team' || gameMode === 'domination';
+// Gun Game: kill basina sirayla gecilen silahlar (sunucudaki sirayla ayni olmali)
+const GUN_GAME_ORDER = ['smg', 'rifle', 'shotgun', 'sniper'];
+const gunForLevel = (lvl) => GUN_GAME_ORDER[Math.min(Math.max(0, lvl), GUN_GAME_ORDER.length - 1)];
+// Gun Game'de oyuncunun silahini seviyesine (kills) gore ayarla
+function applyGunGameWeapon() {
+  switchGun(gunForLevel(player.kills));
+}
+// Round/oyun basinda moda gore baslangic silahini kusan
+function equipForMode() {
+  if (gameMode === 'gungame') applyGunGameWeapon();
+  else if (gameMode === 'kilic') switchGun('sword');
+  else switchGun('rifle');
+}
+
+// ---- Mod aciklamalari (baslangic ekraninda "nasil oynanir") ----
+const MODE_INFO = {
+  duel: {
+    title: '⚔️ Duel — Birebir Düello',
+    goal: 'İki oyuncu karşı karşıya. Rakibini en çok sen öldür.',
+    how: [
+      'Öldüğünde 3 saniye sonra yeniden doğarsın.',
+      'Skor üstte: senin öldürmen — rakibin öldürmesi.',
+      'Tüm silahları haritadan toplayabilirsin (E).',
+    ],
+    meta: '👥 2 oyuncu • Yeniden doğmalı',
+  },
+  arena: {
+    title: '🎯 Arena — Herkes Herkese',
+    goal: 'Serbest çatışma (FFA). En çok öldürme yapan lider olur.',
+    how: [
+      '2-8 oyuncu; oyun başladıktan sonra da katılınabilir.',
+      'Öldüğünde 3 saniyede yeniden doğarsın.',
+      'Haritaya saçılan silah ve can paketlerini topla.',
+    ],
+    meta: '👥 2-8 oyuncu • Yeniden doğmalı • Sonradan katılma',
+  },
+  team: {
+    title: '🚔 Takım — Polis vs Haydut',
+    goal: 'Round bazlı takım savaşı. Rakip takımın tamamını eleyen round kazanır.',
+    how: [
+      'Başta takım seçersin (Polis 🔵 / Haydut 🔴). Dost ateşi yok.',
+      'Round içinde ölen bekler; round bitince herkes yeniden doğar.',
+      'Üstteki skor takımların kazandığı round sayısıdır.',
+      'M tuşu ile takım değiştirebilirsin.',
+    ],
+    meta: '👥 2-8 oyuncu • Round eleme • Takım seçimi',
+  },
+  gungame: {
+    title: '🔫 Gun Game — Silah Yarışı',
+    goal: 'Her öldürme seni sıradaki silaha geçirir. Sırayı ilk bitiren kazanır.',
+    how: [
+      'Silah sırası: MP5 → AK-47 → Pompalı → AWP.',
+      'Her öldürmede canın tamamen dolar.',
+      'Son silahla (AWP) öldürme yapan maçı kazanır.',
+      'Silah toplanmaz; seviyene göre otomatik verilir.',
+    ],
+    meta: '👥 2-8 oyuncu • Herkes herkese • 4 öldürmede biter',
+  },
+  domination: {
+    title: '🚩 Bölge Kapma — Domination',
+    goal: 'Haritadaki 3 bölgeyi tutarak puan topla. Hedefe ilk ulaşan takım kazanır.',
+    how: [
+      'Takım seçersin (Polis 🔵 / Haydut 🔴). Dost ateşi yok.',
+      'Bölgede yalnız senin takımın olursa bölge ele geçer — zemin halkası takım rengine döner.',
+      'Tuttuğun her bölge saniye başına puan kazandırır (3 bölge = 3 kat hızlı).',
+      'İki takım da bölgedeyse kapma durur (çekişme).',
+      '150 puana ilk ulaşan takım kazanır.',
+    ],
+    meta: '👥 2-8 oyuncu • Takım • Bölgeler: Alfa / Bravo / Charlie',
+  },
+  kilic: {
+    title: '🗡️ Kılıç — Düello (Eleme)',
+    goal: 'Ateşli silah yok, sadece kılıç. Round sonunda sona kalan kazanır.',
+    how: [
+      'Sol tık ile yakın mesafede savurursun; isabet anında öldürür.',
+      'Round içinde ölen elenir, yeniden doğmaz.',
+      'Son ayakta kalan oyuncu round galibiyetini alır.',
+      'Skor: kazanılan round sayısı. Yeni round otomatik başlar.',
+    ],
+    meta: '👥 2-8 oyuncu • Eleme • Silah yok',
+  },
+};
+
+function renderModeInfo() {
+  const el = $('mode-info');
+  if (!el) return;
+  const info = MODE_INFO[gameMode] || MODE_INFO.duel;
+  el.innerHTML = `
+    <h4>${info.title}</h4>
+    <div class="mi-goal">${info.goal}</div>
+    <ul>${info.how.map((h) => `<li>${h}</li>`).join('')}</ul>
+    <div class="mi-meta">${info.meta}</div>`;
+}
 
 document.querySelectorAll('[data-mode]').forEach((card) => {
   card.classList.toggle('sel', card.dataset.mode === gameMode);
@@ -69,8 +173,10 @@ document.querySelectorAll('[data-mode]').forEach((card) => {
     gameMode = card.dataset.mode;
     localStorage.setItem('cs_mode', gameMode);
     document.querySelectorAll('[data-mode]').forEach((c) => c.classList.toggle('sel', c === card));
+    renderModeInfo();
   };
 });
+renderModeInfo();
 
 document.querySelectorAll('[data-arena]').forEach((card) => {
   card.classList.toggle('sel', card.dataset.arena === arenaChoice);
@@ -433,7 +539,11 @@ document.addEventListener('mousedown', (e) => {
   if (!gameRunning || document.pointerLockElement !== document.body) return;
   e.preventDefault();
   if (e.button === 0) { mouseDown = true; tryShoot(); }
-  if (e.button === 2) toggleZoom(!player.zoomed);
+  if (e.button === 2) {
+    // Kilic: sag tik = hafif vurus; diger silahlar: zoom
+    if (GUNS[player.gun].melee) meleeAttack('light');
+    else toggleZoom(!player.zoomed);
+  }
 });
 document.addEventListener('mouseup', (e) => {
   if (e.button === 0) mouseDown = false;
@@ -552,6 +662,8 @@ camera.add(gunGroup);
 scene.add(camera);
 let gunRecoil = 0;
 let screenShake = 0;
+let swordSwing = 0; // kilic savurma animasyonu (1 -> 0)
+let swordSwingType = 'heavy'; // son savurma tipi (heavy/light)
 
 // Her silaha özgü detaylı model (viewmodel + yerdeki silahlar aynı modeli kullanır)
 function makeGunMesh(type) {
@@ -566,6 +678,19 @@ function makeGunMesh(type) {
     grp.add(m);
     return m;
   };
+
+  // Kilic: celik bicak + kabza (gun parcalari yok)
+  if (type === 'sword') {
+    const blade = new THREE.MeshStandardMaterial({ color: 0xdfe6ef, roughness: 0.2, metalness: 0.9 });
+    const grip = new THREE.MeshStandardMaterial({ color: 0x4a2c18, roughness: 0.7, metalness: 0.1 });
+    const guard = new THREE.MeshStandardMaterial({ color: 0xc9a227, roughness: 0.4, metalness: 0.7 });
+    add(new THREE.BoxGeometry(0.05, 0.012, 1.05), blade, 0, 0.02, -0.5);   // bicak
+    add(new THREE.ConeGeometry(0.028, 0.16, 4), blade, 0, 0.02, -1.06, Math.PI / 2); // uc
+    add(new THREE.BoxGeometry(0.22, 0.04, 0.05), guard, 0, 0.02, 0.04);    // siper (balçak)
+    add(new THREE.CylinderGeometry(0.022, 0.022, 0.2, 8), grip, 0, 0.02, 0.16, Math.PI / 2); // sap
+    add(new THREE.SphereGeometry(0.032, 8, 8), guard, 0, 0.02, 0.27);      // topuz
+    return grp;
+  }
 
   // Ortak: gövde + kabza
   add(new THREE.BoxGeometry(0.085, 0.12, 0.46), metal, 0, 0, 0);
@@ -630,6 +755,49 @@ const flashSprite = new THREE.Sprite(new THREE.SpriteMaterial({
 flashSprite.scale.set(0.35, 0.35, 1);
 flashSprite.position.set(0.28, -0.2, -1.05);
 camera.add(flashSprite);
+
+// ---- Kilic savurma izi (slash) efekti: agir ve hafif icin farkli gorseller ----
+function makeSlashTexture(kind) {
+  const c = document.createElement('canvas');
+  c.width = c.height = 160;
+  const ctx = c.getContext('2d');
+  ctx.translate(80, 80);
+  ctx.lineCap = 'round';
+  if (kind === 'heavy') {
+    // Kalin, sicak renkli genis yay (agir vurus)
+    ctx.strokeStyle = 'rgba(255,170,50,0.55)'; ctx.lineWidth = 34;
+    ctx.beginPath(); ctx.arc(0, 0, 58, Math.PI * 0.12, Math.PI * 0.88); ctx.stroke();
+    ctx.strokeStyle = 'rgba(255,245,200,0.98)'; ctx.lineWidth = 14;
+    ctx.beginPath(); ctx.arc(0, 0, 58, Math.PI * 0.12, Math.PI * 0.88); ctx.stroke();
+  } else {
+    // Ince, soguk renkli hizli yay (hafif vurus)
+    ctx.strokeStyle = 'rgba(120,225,255,0.5)'; ctx.lineWidth = 16;
+    ctx.beginPath(); ctx.arc(0, 0, 62, Math.PI * 0.02, Math.PI * 0.5); ctx.stroke();
+    ctx.strokeStyle = 'rgba(235,252,255,0.98)'; ctx.lineWidth = 6;
+    ctx.beginPath(); ctx.arc(0, 0, 62, Math.PI * 0.02, Math.PI * 0.5); ctx.stroke();
+  }
+  return new THREE.CanvasTexture(c);
+}
+const slashTex = { heavy: makeSlashTexture('heavy'), light: makeSlashTexture('light') };
+const slashSprite = new THREE.Sprite(new THREE.SpriteMaterial({
+  map: slashTex.heavy, transparent: true, opacity: 0, depthTest: false, blending: THREE.AdditiveBlending,
+}));
+slashSprite.position.set(0.02, -0.05, -1.0);
+camera.add(slashSprite);
+const slashFx = { t: 0, dur: 0.3, type: 'heavy', rot0: 0, sweep: 1.4, base: 1.4 };
+function spawnSlashFx(type) {
+  slashSprite.material.map = slashTex[type];
+  slashSprite.material.needsUpdate = true;
+  slashFx.t = 0;
+  slashFx.type = type;
+  slashFx.dur = type === 'heavy' ? 0.34 : 0.16;
+  slashFx.rot0 = type === 'heavy' ? Math.PI * 0.9 : -Math.PI * 0.1;
+  slashFx.sweep = type === 'heavy' ? 1.7 : 1.1;
+  slashFx.base = type === 'heavy' ? 1.5 : 1.05;
+  slashSprite.material.rotation = slashFx.rot0;
+  slashSprite.material.opacity = 1;
+  slashSprite.scale.set(slashFx.base, slashFx.base, 1);
+}
 
 // ================== RAKİP MODELİ ==================
 const enemies = new Map(); // id -> {id, name, group, head, body, targetPos, targetYaw, hp, kills, alive}
@@ -736,7 +904,22 @@ function createEnemy(info) {
   };
   setEnemyCrouch(enemy, !!info.crouch);
   enemies.set(info.id, enemy);
+  nameTag.visible = nameTagVisibleFor(enemy);
   return enemy;
+}
+
+// Takim modunda isim etiketi yalnizca kendi takimindakiler icin gorunur;
+// dusmanlarin etiketi gizlenir (duvar arkasindan konum sizdirmasin diye).
+function nameTagVisibleFor(enemy) {
+  if (!isTeamMode()) return true;
+  return !!myTeam && enemy.team === myTeam;
+}
+
+// Tum rakiplerin isim etiketi gorunurlugunu (kendi takimima gore) tazele.
+function refreshTeamVisibility() {
+  for (const e of enemies.values()) {
+    if (e.nameTag) e.nameTag.visible = nameTagVisibleFor(e);
+  }
 }
 
 function setEnemyCrouch(enemy, crouch) {
@@ -751,6 +934,7 @@ function setEnemyTeam(enemy, team) {
   const tag = makeNameSprite(enemy.name, team);
   enemy.group.add(tag);
   enemy.nameTag = tag;
+  tag.visible = nameTagVisibleFor(enemy);
 }
 
 function removeEnemy(id) {
@@ -817,6 +1001,82 @@ function spawnHealthPack(id, pos) {
   grp.position.set(pos[0], gy + 0.5, pos[2]);
   scene.add(grp);
   healthPacks.set(id, { mesh: grp, pos: new THREE.Vector3(pos[0], gy, pos[2]) });
+}
+
+// ================== DOMINATION BÖLGELERİ ==================
+// Sunucudaki DOM_ZONES ile ayni konum/yaricap olmali.
+const DOM_ZONE_DEFS = [
+  { pos: [-14, 0, -14], name: 'ALFA' },
+  { pos: [0, 0, 0], name: 'BRAVO' },
+  { pos: [14, 0, 14], name: 'CHARLIE' },
+];
+const DOM_RADIUS_C = 4.2;
+const domZones = []; // {grp, disc, ring, beam, pos}
+
+function makeZoneLabel(name) {
+  const c = document.createElement('canvas');
+  c.width = 160; c.height = 64;
+  const ctx = c.getContext('2d');
+  ctx.font = 'bold 34px Arial';
+  ctx.textAlign = 'center';
+  ctx.fillStyle = 'rgba(0,0,0,0.5)';
+  ctx.fillRect(0, 12, 160, 40);
+  ctx.fillStyle = '#fff';
+  ctx.fillText(name, 80, 44);
+  const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: new THREE.CanvasTexture(c), depthTest: false, transparent: true }));
+  sp.scale.set(2.4, 0.96, 1);
+  sp.position.y = 3.4;
+  return sp;
+}
+
+function buildDomZones() {
+  clearDomZones();
+  for (const z of DOM_ZONE_DEFS) {
+    const grp = new THREE.Group();
+    const gy = groundHeightAt(z.pos[0], z.pos[2]);
+    const disc = new THREE.Mesh(
+      new THREE.CircleGeometry(DOM_RADIUS_C, 36),
+      new THREE.MeshBasicMaterial({ color: 0x888888, transparent: true, opacity: 0.22, depthWrite: false })
+    );
+    disc.rotation.x = -Math.PI / 2;
+    disc.position.y = 0.05;
+    const ring = new THREE.Mesh(
+      new THREE.TorusGeometry(DOM_RADIUS_C, 0.08, 8, 44),
+      new THREE.MeshBasicMaterial({ color: 0x888888, transparent: true, opacity: 0.85 })
+    );
+    ring.rotation.x = -Math.PI / 2;
+    ring.position.y = 0.07;
+    const beam = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.25, 0.25, 6, 12, 1, true),
+      new THREE.MeshBasicMaterial({ color: 0x888888, transparent: true, opacity: 0.16, depthWrite: false, side: THREE.DoubleSide })
+    );
+    beam.position.y = 3;
+    grp.add(disc, ring, beam, makeZoneLabel(z.name));
+    grp.position.set(z.pos[0], gy, z.pos[2]);
+    scene.add(grp);
+    domZones.push({ grp, disc, ring, beam, pos: new THREE.Vector3(z.pos[0], gy, z.pos[2]) });
+  }
+}
+
+function clearDomZones() {
+  for (const z of domZones.splice(0)) scene.remove(z.grp);
+}
+
+// cap: -100 (haydut/kirmizi) .. 0 (notr) .. +100 (polis/mavi)
+const _domColPolice = new THREE.Color(0x6db3ff);
+const _domColBandit = new THREE.Color(0xff6b6b);
+const _domColNeutral = new THREE.Color(0x888888);
+function updateDomZones(caps) {
+  if (!caps) return;
+  for (let i = 0; i < domZones.length && i < caps.length; i++) {
+    const c = caps[i];
+    const t = Math.min(1, Math.abs(c) / 100);
+    const col = c > 0 ? _domColPolice : c < 0 ? _domColBandit : _domColNeutral;
+    const z = domZones[i];
+    z.disc.material.color.copy(col); z.disc.material.opacity = 0.16 + t * 0.34;
+    z.ring.material.color.copy(col); z.ring.material.opacity = 0.5 + t * 0.5;
+    z.beam.material.color.copy(col); z.beam.material.opacity = 0.08 + t * 0.34;
+  }
 }
 
 // ================== ÇARPIŞMA ==================
@@ -995,6 +1255,7 @@ function ejectShell() {
 function tryShoot() {
   if (!gameRunning || !player.alive || player.reloading) return;
   const g = GUNS[player.gun];
+  if (g.melee) { meleeAttack('heavy'); return; } // sol tik = agir vurus (kendi beklemesi var)
   const now = performance.now();
   if (now - player.lastShot < g.fireDelay) return;
   if (player.ammo <= 0) { playBlip(200, 0.06, 0.12); tryReload(); return; }
@@ -1021,7 +1282,7 @@ function tryShoot() {
 
   const targets = [...solids];
   for (const e of enemies.values()) {
-    if (gameMode === 'team' && e.team && e.team === myTeam) continue;
+    if (isTeamMode() && e.team && e.team === myTeam) continue;
     if (e.alive) targets.push(e.head, e.body, e.legs, e.armL, e.armR);
   }
 
@@ -1067,6 +1328,74 @@ function tryShoot() {
     playBlip(hitHead ? 880 : 600, 0.07, 0.25);
   }
   socket.emit('shoot', { from: muzzle.toArray(), tos, gun: player.gun });
+}
+
+// Kilic vurus tipleri:
+//  heavy (SOL TIK) -> 50 hasar, yavas (uzun bekleme + agir savurma) = dezavantaj
+//  light (SAG TIK) -> 33 hasar, hizli (kisa bekleme + cevik savurma)
+const MELEE = {
+  heavy: { dmg: 50, cd: 720, range: 3.0, snd: [150, 0.2, 0.34] },
+  light: { dmg: 33, cd: 320, range: 2.5, snd: [340, 0.07, 0.2] },
+};
+
+function meleeAttack(type = 'heavy') {
+  if (!gameRunning || !player.alive) return;
+  const m = MELEE[type] || MELEE.heavy;
+  const now = performance.now();
+  if (now - player.lastShot < m.cd) return; // her tipin kendi beklemesi
+  player.lastShot = now;
+  swordSwing = 1;
+  swordSwingType = type;
+  spawnSlashFx(type);
+  playBlip(m.snd[0], m.snd[1], m.snd[2]); // savurma sesi (tipe gore)
+  if (type === 'heavy') screenShake = Math.max(screenShake, 0.35);
+
+  const origin = camera.getWorldPosition(new THREE.Vector3());
+  const dir = new THREE.Vector3(0, 0, -1).applyQuaternion(camera.quaternion);
+
+  const targets = [...solids]; // duvarlar dahil: kilic duvardan gecmesin
+  for (const e of enemies.values()) {
+    if (isTeamMode() && e.team && e.team === myTeam) continue;
+    if (e.alive) targets.push(e.head, e.body, e.legs, e.armL, e.armR);
+  }
+  raycaster.set(origin, dir);
+  raycaster.far = m.range;
+  const hits = raycaster.intersectObjects(targets, false);
+
+  let hitAny = false, hitHead = false;
+  if (hits.length > 0 && hits[0].distance <= m.range) {
+    const part = hits[0].object.userData.part;
+    if (part) {
+      const targetId = hits[0].object.userData.playerId;
+      const target = enemyById(targetId);
+      socket.emit('hit', { part, gun: 'sword', melee: type, targetId });
+      if (!target || target.protUntil <= Date.now()) {
+        hitAny = true;
+        if (part === 'head') hitHead = true;
+        meleeHitEffect(hits[0].point, type);
+      }
+    } else {
+      impactEffect(hits[0].point, false); // duvara/zemine carpti
+    }
+  }
+  if (hitAny) {
+    showHitmarker(hitHead);
+    if (type === 'heavy') { playBlip(720, 0.1, 0.32); screenShake = Math.max(screenShake, 0.7); }
+    else playBlip(560, 0.05, 0.2);
+  }
+  // Diger oyunculara savurmayi bildir (ses + iz yok)
+  socket.emit('shoot', { from: origin.toArray(), tos: [], gun: 'sword', melee: type });
+}
+
+// Kilic isabet patlamasi - agir ve hafif farkli
+function meleeHitEffect(point, type) {
+  if (type === 'heavy') {
+    spawnParticles(point, 0xff2e2e, 24, 5.5, 11, 0.5, 0.08);  // buyuk kan patlamasi
+    spawnParticles(point, 0xfff0a0, 12, 6.5, 8, 0.35, 0.06);  // altin kivilcim
+  } else {
+    spawnParticles(point, 0x9fe8ff, 14, 6, 9, 0.32, 0.06);    // hizli mavi
+    spawnParticles(point, 0xffffff, 7, 4.5, 7, 0.24, 0.045);  // beyaz
+  }
 }
 
 function showHitmarker(head) {
@@ -1165,6 +1494,7 @@ function updateHpHUD() {
       : 'linear-gradient(90deg,#e74c3c,#c0392b)';
 }
 function updateAmmoHUD() {
+  if (GUNS[player.gun].melee) { $('ammo').innerHTML = `🗡️ <small>∞</small>`; return; }
   $('ammo').innerHTML = `${player.ammo} <small>/ ${GUNS[player.gun].mag}</small>`;
 }
 function updateScoreHUD() {
@@ -1173,6 +1503,33 @@ function updateScoreHUD() {
     $('score-en').textContent = teamScores.bandit || 0;
     $('score-me-name').textContent = `Polis R${currentRound}`;
     $('score-en-name').textContent = 'Haydut';
+    return;
+  }
+  if (gameMode === 'domination') {
+    $('score-me').textContent = teamScores.police || 0;
+    $('score-en').textContent = teamScores.bandit || 0;
+    $('score-me-name').textContent = '🚔 Polis';
+    $('score-en-name').textContent = 'Haydut 🦹';
+    return;
+  }
+  if (gameMode === 'kilic') {
+    const myWins = ffaWins[socket.id] || 0;
+    const others = [...enemies.values()].map((e) => ({ name: e.name, wins: ffaWins[e.id] || 0 })).sort((a, b) => b.wins - a.wins);
+    const leader = others[0] || null;
+    $('score-me').textContent = `${myWins} 🏆`;
+    $('score-en').textContent = leader ? `${leader.wins} 🏆` : '0';
+    $('score-me-name').textContent = `${myName} R${currentRound}`;
+    $('score-en-name').textContent = leader ? leader.name : 'Rakip';
+    return;
+  }
+  if (gameMode === 'gungame') {
+    const n = GUN_GAME_ORDER.length;
+    const others = [...enemies.values()].sort((a, b) => b.kills - a.kills);
+    const leader = others[0] || null;
+    $('score-me').textContent = `Sv ${Math.min(player.kills, n)}/${n}`;
+    $('score-en').textContent = leader ? `Sv ${Math.min(leader.kills, n)}/${n}` : '0';
+    $('score-me-name').textContent = myName;
+    $('score-en-name').textContent = leader ? leader.name : 'Rakip';
     return;
   }
   $('score-me').textContent = player.kills;
@@ -1210,13 +1567,14 @@ function renderScoreboard() {
     </tr>`;
   const tableHead = `<tr><th>Oyuncu</th><th>Vurus</th><th>Olum</th></tr>`;
 
-  if (gameMode === 'team') {
+  if (isTeamMode()) {
+    const scoreLabel = gameMode === 'domination' ? 'Puan' : 'Round';
     const make = (team, label, cls) => {
       const list = rows.filter((r) => r.team === team).sort((a, b) => b.kills - a.kills);
       const total = list.reduce((s, r) => s + (r.kills || 0), 0);
       return `
         <div class="sb-team ${cls}">
-          <div class="sb-team-head"><span>${label}</span><span>Round: ${teamScores[team] || 0} • Vurus: ${total}</span></div>
+          <div class="sb-team-head"><span>${label}</span><span>${scoreLabel}: ${teamScores[team] || 0} • Vurus: ${total}</span></div>
           <table>${tableHead}${list.map(rowHtml).join('') || '<tr><td colspan="3" class="sb-empty">—</td></tr>'}</table>
         </div>`;
     };
@@ -1265,6 +1623,7 @@ socket.on('start', ({ players, weapons, arena, mode, round, teamScores: scores }
   groundWeapons.clear();
   for (const p of [...healthPacks.values()]) scene.remove(p.mesh);
   healthPacks.clear();
+  clearDomZones();
 
   for (const info of players) {
     if (info.id === socket.id) {
@@ -1278,12 +1637,15 @@ socket.on('start', ({ players, weapons, arena, mode, round, teamScores: scores }
       myTeam = info.team || null;
       player.crouch = false;
       player.eyeHeight = STAND_EYE_HEIGHT;
-      switchGun('rifle');
+      equipForMode();
     } else {
       createEnemy(info);
     }
   }
+  refreshTeamVisibility(); // myTeam belli oldu -> dusman etiketlerini gizle
+  if (gameMode === 'kilic') { ffaWins = {}; for (const info of players) ffaWins[info.id] = info.wins || 0; }
   for (const w of weapons) spawnGroundWeapon(w);
+  if (gameMode === 'domination') buildDomZones();
 
   $('waiting').style.display = 'none';
   $('menu').style.display = 'none';
@@ -1292,12 +1654,21 @@ socket.on('start', ({ players, weapons, arena, mode, round, teamScores: scores }
   $('roomtag-code').textContent = roomCode;
   gameRunning = true;
   updateHpHUD(); updateAmmoHUD(); updateScoreHUD();
-  toast(gameMode === 'team' ? `Round ${currentRound}: Polis vs Haydut` : (gameMode === 'arena' ? 'Arena basladi!' : 'Rakip geldi! Savas basladi!'));
+  const startMsg = gameMode === 'team' ? `Round ${currentRound}: Polis vs Haydut`
+    : gameMode === 'domination' ? 'Bölgeleri ele geçir! 🚩'
+    : gameMode === 'gungame' ? 'Gun Game! Her kill yeni silah 🔫'
+    : gameMode === 'kilic' ? 'Kılıç düellosu! Sona kalan kazanır 🗡️'
+    : gameMode === 'arena' ? 'Arena basladi!' : 'Rakip geldi! Savas basladi!';
+  toast(startMsg);
+  if (gameMode === 'kilic') {
+    setTimeout(() => toast('SOL TIK: ağır vuruş 50 (yavaş) ⚔️  •  SAĞ TIK: hızlı vuruş 33 🗡️', 4000), 2700);
+  }
   // Pointer lock yalnızca gerçek bir kullanıcı tıklamasından sonra açılabilir
   // (tarayıcı kısıtı). Otomatik açmaya çalışmak sessizce reddedilir ve oyuncu
   // donar. Bu yüzden "tıkla ve başla" ekranını gösteriyoruz; kilit btn-resume
   // tıklamasıyla açılır.
   // Takim modunda once takim secim ekrani, ardindan sensitivity/baslat ekrani.
+  // Polis/Haydut takim secim ekrani YALNIZCA takim modunda gosterilir.
   if (gameMode === 'team' && !teamChosen) {
     showTeamSelect();
   } else {
@@ -1313,8 +1684,14 @@ socket.on('enemyMove', (d) => {
   setEnemyCrouch(enemy, !!d.c);
 });
 
-socket.on('enemyShoot', ({ from, to, tos, gun }) => {
+socket.on('enemyShoot', ({ from, to, tos, gun, melee }) => {
   const f = new THREE.Vector3(...from);
+  const dist = player.pos.distanceTo(f);
+  if (melee) {
+    // Kilic savurmasi: iz/namlu yok, sadece yakinsa hafif savurma sesi
+    if (dist < 8) playBlip(200, 0.12, Math.max(0.05, 0.2 * (1 - dist / 8)));
+    return;
+  }
   const ends = tos || (to ? [to] : []);
   for (const t of ends) {
     const e = new THREE.Vector3(...t);
@@ -1322,7 +1699,6 @@ socket.on('enemyShoot', ({ from, to, tos, gun }) => {
     impactEffect(e, false);
   }
   // Mesafeye göre ses
-  const dist = player.pos.distanceTo(f);
   playShotSound(gun || 'rifle', Math.max(0.15, 1 - dist / 70));
 });
 
@@ -1345,6 +1721,16 @@ socket.on('death', ({ victim, killer, headshot, scores }) => {
   if (killer === socket.id && victim !== socket.id) {
     player.streak++;
     if (player.streak >= 3) centerBanner(`${player.streak} SERI!`, 'gold', 1100);
+    // Gun Game: kill yapinca cana doy + siradaki silaha gec (banner ile)
+    if (gameMode === 'gungame') {
+      player.hp = 100;
+      updateHpHUD();
+      const n = GUN_GAME_ORDER.length;
+      if (player.kills < n) {
+        applyGunGameWeapon();
+        centerBanner(`SEVİYE ${player.kills + 1} — ${GUNS[gunForLevel(player.kills)].name}`, 'gold', 1100);
+      }
+    }
   }
 
   const killerName = nameById(killer);
@@ -1358,7 +1744,7 @@ socket.on('death', ({ victim, killer, headshot, scores }) => {
     updateHpHUD();
     $('death-overlay').style.display = 'flex';
     showScoreboard(true); // oldugunde skor tablosunu goster
-    if (gameMode === 'team') {
+    if (gameMode === 'team' || gameMode === 'kilic') {
       $('respawn-count').textContent = '';
       $('death-overlay').querySelector('p').textContent = 'Round bitene kadar bekliyorsun...';
       return;
@@ -1391,7 +1777,7 @@ socket.on('respawn', ({ id, pos, yaw, hp, prot }) => {
     player.eyeHeight = STAND_EYE_HEIGHT;
     player.hp = hp;
     player.alive = true;
-    switchGun(player.gun); // şarjörü doldur
+    if (gameMode === 'gungame') applyGunGameWeapon(); else switchGun(player.gun); // şarjörü doldur
     $('death-overlay').style.display = 'none';
     if (!scoreboardPinned) showScoreboard(false);
     updateHpHUD();
@@ -1417,6 +1803,7 @@ socket.on('respawn', ({ id, pos, yaw, hp, prot }) => {
 socket.on('teamChanged', ({ id, team, pos, yaw, hp, prot }) => {
   if (id === socket.id) {
     myTeam = team;
+    refreshTeamVisibility(); // takimim degisti -> tum etiket gorunurlugu yeniden
     if (pos) { const [sx, sz] = safeSpawnPos(pos[0], pos[2]); player.pos.set(sx, pos[1] || 0, sz); }
     if (typeof yaw === 'number') player.yaw = yaw;
     if (typeof hp === 'number') { player.hp = hp; player.alive = hp > 0; }
@@ -1439,13 +1826,52 @@ socket.on('teamChanged', ({ id, team, pos, yaw, hp, prot }) => {
   if ($('scoreboard').style.display === 'block') renderScoreboard();
 });
 
-socket.on('roundEnd', ({ winner, teamScores: scores, nextRoundIn }) => {
+socket.on('roundEnd', ({ winner, winnerId, winnerName, ffa, wins, teamScores: scores, nextRoundIn }) => {
+  showScoreboard(true); // round sonu skor tablosunu goster
+  if (ffa) {
+    // Kilic (FFA): son kalan oyuncu round'u kazanir
+    if (wins) ffaWins = wins;
+    updateScoreHUD();
+    if (winnerId) {
+      const won = winnerId === socket.id;
+      const nm = won ? 'SEN' : (winnerName || 'Bir oyuncu');
+      centerBanner(`${nm} KAZANDI 🗡️`, won ? 'gold' : 'red', nextRoundIn || 3500);
+      toast(`${won ? 'Sen' : winnerName} round'u kazandin!`, nextRoundIn || 3500);
+    } else {
+      centerBanner('BERABERE', 'blue', nextRoundIn || 3500);
+    }
+    return;
+  }
   teamScores = scores || teamScores;
   updateScoreHUD();
-  showScoreboard(true); // round sonu skor tablosunu goster
   const name = winner === 'police' ? 'Polis' : 'Haydut';
   centerBanner(`${name.toUpperCase()} KAZANDI`, winner === 'police' ? 'blue' : 'red', nextRoundIn || 3500);
   toast(`${name} round kazandi!`, nextRoundIn || 3500);
+});
+
+// Domination: bolge durumu (1 sn'de bir gelir) - skor + ele gecirme yuzdeleri
+socket.on('domState', ({ caps, scores }) => {
+  if (scores) { teamScores = scores; updateScoreHUD(); }
+  updateDomZones(caps);
+  if ($('scoreboard').style.display === 'block') renderScoreboard();
+});
+
+// Mac sonu: Gun Game galibi veya Domination hedefi. 5 sn sonra yeni mac baslar.
+socket.on('gameOver', ({ winner, winnerName, winnerTeam, scores }) => {
+  if (scores) applyScores(scores);
+  showScoreboard(true);
+  document.exitPointerLock();
+  let label, kind;
+  if (winnerTeam) {
+    label = `${winnerTeam === 'police' ? '🚔 POLİS' : '🦹 HAYDUT'} KAZANDI`;
+    kind = winnerTeam === 'police' ? 'blue' : 'red';
+  } else {
+    const me = winner === socket.id;
+    label = me ? '🏆 KAZANDIN!' : `${winnerName || nameById(winner)} KAZANDI`;
+    kind = 'gold';
+  }
+  centerBanner(label, kind, 4800);
+  toast('Yeni maç 5 saniye içinde başlıyor...', 4800);
 });
 
 socket.on('roundStart', ({ players, weapons, round, teamScores: scores }) => {
@@ -1468,7 +1894,7 @@ socket.on('roundStart', ({ players, weapons, round, teamScores: scores }) => {
       player.crouch = false;
       player.eyeHeight = STAND_EYE_HEIGHT;
       myTeam = info.team || myTeam;
-      switchGun('rifle');
+      equipForMode();
       $('death-overlay').style.display = 'none';
       if (!scoreboardPinned) showScoreboard(false);
       $('death-overlay').querySelector('p').innerHTML = '<span id="respawn-count">3</span> saniye sonra yeniden dogacaksin...';
@@ -1477,6 +1903,7 @@ socket.on('roundStart', ({ players, weapons, round, teamScores: scores }) => {
       createEnemy(info);
     }
   }
+  refreshTeamVisibility(); // dusman etiketlerini gizle
   for (const w of weapons) spawnGroundWeapon(w);
   updateAmmoHUD();
   updateScoreHUD();
@@ -1650,6 +2077,30 @@ function animate() {
     gunGroup.position.y = -0.24 + bob - reloadDip * 0.22;
     gunGroup.rotation.x = gunRecoil * 0.15 + reloadDip * 0.65;
     gunGroup.rotation.z = player.reloading ? Math.sin(reloadProg * Math.PI * 2) * 0.18 : 0;
+    // Kilic: viewmodel savurma (tipe gore farkli) - gun anim'ini ezer
+    if (GUNS[player.gun].melee) {
+      const decay = swordSwingType === 'light' ? 4.8 : 2.3; // hafif hizli, agir yavas
+      swordSwing = Math.max(0, swordSwing - dt * decay);
+      const s = Math.sin(swordSwing * Math.PI); // 0->1->0 yumusak yay
+      if (swordSwingType === 'light') {
+        // Cevik yatay savurma (saga dogru flick)
+        gunGroup.position.set(0.26 - s * 0.10, -0.22 + bob, -0.5 + s * 0.06);
+        gunGroup.rotation.set(-s * 0.5, s * 1.25, 0.35 - s * 0.6);
+      } else {
+        // Agir tepeden asagi savurma (genis + guclu)
+        gunGroup.position.set(0.26 + s * 0.05, -0.22 + bob + s * 0.17, -0.5 + s * 0.2);
+        gunGroup.rotation.set(-s * 1.95, 0, 0.35 - s * 1.05);
+      }
+    }
+    // Kilic savurma izi (slash sprite) sonumlemesi
+    if (slashSprite.material.opacity > 0) {
+      slashFx.t += dt;
+      const k = Math.min(1, slashFx.t / slashFx.dur);
+      slashSprite.material.opacity = 1 - k;
+      const grow = slashFx.base + k * (slashFx.type === 'heavy' ? 1.0 : 0.7);
+      slashSprite.scale.set(grow, grow, 1);
+      slashSprite.material.rotation = slashFx.rot0 - k * slashFx.sweep; // yay supurmesi
+    }
     flash.intensity = Math.max(0, flash.intensity - dt * 30);
     flashSprite.material.opacity = Math.max(0, flashSprite.material.opacity - dt * 20);
 
@@ -1679,6 +2130,8 @@ function animate() {
       p.mesh.rotation.y += dt * 2;
       p.mesh.position.y = p.pos.y + 0.5 + Math.sin(now * 0.004) * 0.12;
     }
+    // Domination bölge halkaları yavaşça döner (hafif)
+    for (const z of domZones) z.ring.rotation.z += dt * 0.6;
 
     checkPickups();
 

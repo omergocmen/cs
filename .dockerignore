@@ -1,0 +1,29 @@
+# Bagimliliklar imaj icinde yeniden kurulur
+node_modules
+
+# Loglar ve gecici dosyalar
+*.log
+winget
+
+# Git ve editor
+.git
+.gitignore
+.claude
+.vscode
+
+# Uygulamayla ilgisi olmayan dosyalar (deploy'a girmesin)
+*.pdf
+*.xlsx
+*.jpg
+*.png
+smoke-test.js
+modes-test.js
+
+# Kullanilmayan kok-dizin statikleri (gercek frontend public/ icinde)
+/index.html
+/script.js
+/style.css
+
+# Dockerfile'in kendisi
+Dockerfile
+.dockerignore

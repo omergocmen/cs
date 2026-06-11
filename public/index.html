@@ -66,6 +66,20 @@
   }
   .mode-card.sel { border-color: #ffb13d; background: #1c2230; }
 
+  /* Secili modun aciklamasi / nasil oynanir */
+  #mode-info {
+    text-align: left; background: #10141d; border: 1px solid #2e3a52;
+    border-left: 3px solid #ffb13d; border-radius: 8px; padding: 9px 12px;
+    margin: 0 0 12px; font-size: 12px; color: #aeb9cc;
+  }
+  #mode-info h4 { color: #ffd36d; font-size: 13px; margin-bottom: 4px; letter-spacing: .4px; }
+  #mode-info .mi-goal { color: #d6deeb; margin-bottom: 7px; line-height: 1.35; }
+  #mode-info ul { list-style: none; display: flex; flex-direction: column; gap: 3px; }
+  #mode-info li { padding-left: 15px; position: relative; line-height: 1.4; }
+  #mode-info li::before { content: '▸'; position: absolute; left: 0; color: #ffb13d; }
+  #mode-info .mi-meta { margin-top: 7px; padding-top: 6px; border-top: 1px solid #222b3d; color: #8b97ad; font-size: 11px; }
+  #mode-info .mi-meta b { color: #aab6cc; }
+
   /* Takim secim ekrani butonlari */
   .team-pick-row { display: flex; gap: 12px; margin-top: 8px; }
   .team-pick {
@@ -269,7 +283,11 @@
       <div class="mode-card sel" data-mode="duel"><strong>Duel</strong><span>2 kisilik klasik oda</span></div>
       <div class="mode-card" data-mode="arena"><strong>Arena</strong><span>2-8 kisi, sonradan katilma</span></div>
       <div class="mode-card" data-mode="team"><strong>Takim</strong><span>Polis vs Haydut round</span></div>
+      <div class="mode-card" data-mode="gungame"><strong>Gun Game</strong><span>Her kill yeni silah, ilk biten kazanir</span></div>
+      <div class="mode-card" data-mode="domination"><strong>Bolge Kapma</strong><span>3 bolge tut, puan topla</span></div>
+      <div class="mode-card" data-mode="kilic"><strong>Kılıç</strong><span>Silah yok, sona kalan kazanir 🗡️</span></div>
     </div>
+    <div id="mode-info"></div>
     <div class="section-label">ARENA</div>
     <div class="mode-row map-row" id="arena-row">
       <div class="mode-card sel" data-arena="depot"><strong>Depo</strong><span>Dengeli siper</span></div>

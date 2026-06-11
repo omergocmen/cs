@@ -20,7 +20,16 @@ const MODES = {
   duel: { label: 'Duel', maxPlayers: 2 },
   arena: { label: 'Arena', maxPlayers: 8 },
   team: { label: 'Takim', maxPlayers: 8 },
+  gungame: { label: 'Gun Game', maxPlayers: 8 },
+  domination: { label: 'Bolge Kapma', maxPlayers: 8 },
+  kilic: { label: 'Kilic', maxPlayers: 8 },
 };
+// Eleme (round) modlari: olunce round bitene kadar beklenir, son kalan kazanir
+const ELIM_MODES = new Set(['team', 'kilic']);
+// Silahsiz modlar: yerde silah olusturma
+const NO_WEAPON_MODES = new Set(['gungame', 'kilic']);
+// Takim tabanli modlar (takim secimi, dost atesi kapali, takim dogumlari)
+const TEAM_MODES = new Set(['team', 'domination']);
 const ARENAS = new Set(['depot', 'lanes', 'fortress', 'yard', 'crossfire']);
 const SPAWNS = [
   { pos: [-22, 0, -10], yaw: Math.PI * 0.6 },
@@ -54,6 +63,7 @@ const DAMAGE = {
   smg:     { head: 60,  body: 22 },
   shotgun: { head: 28,  body: 12 },
   sniper:  { head: 150, body: 85 },
+  sword:   { head: 100, body: 55 },
 };
 const HEALTH_AMOUNT = 40;
 const RESPAWN_MS = 3000;
@@ -61,6 +71,20 @@ const WEAPON_RESPAWN_MS = 25000;
 const SPAWN_PROTECT_MS = 1000;
 const ROUND_RESTART_MS = 4000;
 const TEAMS = ['police', 'bandit'];
+
+// ---- Gun Game: kill basina sirayla gecilen silahlar (bicak yok) ----
+const GUN_GAME_ORDER = ['smg', 'rifle', 'shotgun', 'sniper'];
+
+// ---- Domination (Bolge Kapma) ----
+const DOM_ZONES = [
+  { pos: [-14, 0, -14], name: 'Alfa' },
+  { pos: [0, 0, 0], name: 'Bravo' },
+  { pos: [14, 0, 14], name: 'Charlie' },
+];
+const DOM_RADIUS = 4.2;       // bolge yaricapi
+const DOM_CAP_RATE = 34;      // tick basina ele gecirme hizi (~3 sn'de kapanir)
+const DOM_TARGET = 150;       // kazanmak icin gereken puan
+const DOM_TICK_MS = 1000;     // bolge dongusu periyodu
 
 const TEAM_SPAWNS = {
   police: [
@@ -92,6 +116,7 @@ function getRoom(socket) {
 
 function clearRoomTimers(room) {
   if (room.healthTimer) { clearTimeout(room.healthTimer); room.healthTimer = null; }
+  if (room.domTimer) { clearInterval(room.domTimer); room.domTimer = null; }
   for (const t of room.timers) clearTimeout(t);
   room.timers.clear();
 }
@@ -117,9 +142,11 @@ function startGame(room) {
   room.packs.clear();
   clearRoomTimers(room);
 
-  // Silahlari yere koy
+  // Silahlari yere koy (Gun Game ve Kilic'te yerde silah yok)
   room.weapons.clear();
-  for (const w of WEAPON_SPAWNS) room.weapons.set(w.id, { ...w });
+  if (!NO_WEAPON_MODES.has(room.mode)) {
+    for (const w of WEAPON_SPAWNS) room.weapons.set(w.id, { ...w });
+  }
 
   resetRoundPlayers(room);
 
@@ -128,14 +155,67 @@ function startGame(room) {
 
   io.to(room.code).emit('start', { players, weapons, arena: room.arena, mode: room.mode, round: room.round, teamScores: room.teamScores });
   scheduleHealthPack(room);
+  if (room.mode === 'domination') startDomination(room);
+}
+
+// ---- Domination dongusu ----
+function startDomination(room) {
+  room.dom = { caps: [0, 0, 0], scores: { police: 0, bandit: 0 } };
+  room.roundActive = true; // domination'da round eleme yok, dost atesi hep kapali
+  if (room.domTimer) clearInterval(room.domTimer);
+  room.domTimer = setInterval(() => domTick(room), DOM_TICK_MS);
+}
+
+function domTick(room) {
+  if (!ROOMS.has(room.code) || !room.started || room.mode !== 'domination' || !room.dom) return;
+  const caps = room.dom.caps;
+  const owned = { police: 0, bandit: 0 };
+  for (let i = 0; i < DOM_ZONES.length; i++) {
+    const z = DOM_ZONES[i];
+    let pol = 0, ban = 0;
+    for (const p of room.players.values()) {
+      if (p.hp <= 0 || !p.team) continue;
+      const dx = p.pos[0] - z.pos[0], dz = p.pos[2] - z.pos[2];
+      if (dx * dx + dz * dz <= DOM_RADIUS * DOM_RADIUS) {
+        if (p.team === 'police') pol++; else ban++;
+      }
+    }
+    let c = caps[i];
+    // Yalniz bir takim varsa bolge o tarafa kayar; iki taraf da varsa donar (cekisme)
+    if (pol > 0 && ban === 0) c = Math.min(100, c + DOM_CAP_RATE);
+    else if (ban > 0 && pol === 0) c = Math.max(-100, c - DOM_CAP_RATE);
+    caps[i] = c;
+    if (c >= 100) owned.police++; else if (c <= -100) owned.bandit++;
+  }
+  room.dom.scores.police += owned.police;
+  room.dom.scores.bandit += owned.bandit;
+  io.to(room.code).emit('domState', { caps: caps.slice(), scores: room.dom.scores });
+  if (room.dom.scores.police >= DOM_TARGET) endMatch(room, { winnerTeam: 'police', scores: room.dom.scores });
+  else if (room.dom.scores.bandit >= DOM_TARGET) endMatch(room, { winnerTeam: 'bandit', scores: room.dom.scores });
+}
+
+// Mac sonu (Gun Game galibi veya Domination hedefi). Bir sure sonra yeni mac baslar.
+function endMatch(room, payload) {
+  room.roundActive = false;
+  if (room.domTimer) { clearInterval(room.domTimer); room.domTimer = null; }
+  io.to(room.code).emit('gameOver', payload);
+  const t = setTimeout(() => {
+    room.timers.delete(t);
+    if (!ROOMS.has(room.code) || !room.started) return;
+    for (const p of room.players.values()) { p.kills = 0; p.deaths = 0; }
+    room.teamScores = { police: 0, bandit: 0 };
+    startGame(room);
+  }, 5000);
+  room.timers.add(t);
 }
 
 function resetRoundPlayers(room) {
   let i = 0;
   const teamIndex = { police: 0, bandit: 0 };
   for (const p of room.players.values()) {
-    const spawnList = room.mode === 'team' ? TEAM_SPAWNS[p.team] : SPAWNS;
-    const idx = room.mode === 'team' ? teamIndex[p.team]++ : i;
+    const teamMode = TEAM_MODES.has(room.mode);
+    const spawnList = teamMode ? TEAM_SPAWNS[p.team] : SPAWNS;
+    const idx = teamMode ? teamIndex[p.team]++ : i;
     const s = spawnList[idx % spawnList.length];
     p.hp = 100;
     p.pos = s.pos.slice();
@@ -149,7 +229,7 @@ function resetRoundPlayers(room) {
 function playerInfo(p) {
   return {
     id: p.id, name: p.name, avatar: p.avatar, pos: p.pos, yaw: p.yaw, hp: p.hp, kills: p.kills, deaths: p.deaths,
-    crouch: !!p.crouch, team: p.team || null,
+    crouch: !!p.crouch, team: p.team || null, wins: p.wins || 0,
   };
 }
 
@@ -191,7 +271,9 @@ function startNextRound(room) {
   room.roundActive = true;
   room.packs.clear();
   room.weapons.clear();
-  for (const w of WEAPON_SPAWNS) room.weapons.set(w.id, { ...w });
+  if (!NO_WEAPON_MODES.has(room.mode)) {
+    for (const w of WEAPON_SPAWNS) room.weapons.set(w.id, { ...w });
+  }
   resetRoundPlayers(room);
   io.to(room.code).emit('roundStart', {
     round: room.round,
@@ -225,8 +307,33 @@ function checkRoundEnd(room) {
   room.timers.add(t);
 }
 
+// Kilic (FFA eleme): son kalan oyuncu round'u kazanir
+function checkRoundEndFFA(room) {
+  if (room.mode !== 'kilic' || !room.roundActive) return;
+  if (room.players.size < 2) return; // tek oyuncu, round baslatma/bitirme
+  const alive = [...room.players.values()].filter((p) => p.hp > 0);
+  if (alive.length > 1) return;
+  room.roundActive = false;
+  const winner = alive[0] || null;
+  if (winner) winner.wins = (winner.wins || 0) + 1;
+  const wins = {};
+  for (const p of room.players.values()) wins[p.id] = p.wins || 0;
+  io.to(room.code).emit('roundEnd', {
+    ffa: true,
+    winnerId: winner ? winner.id : null,
+    winnerName: winner ? winner.name : null,
+    wins,
+    nextRoundIn: ROUND_RESTART_MS,
+  });
+  const t = setTimeout(() => {
+    room.timers.delete(t);
+    startNextRound(room);
+  }, ROUND_RESTART_MS);
+  room.timers.add(t);
+}
+
 function resolveTeam(room, requestedTeam) {
-  if (room.mode !== 'team') return null;
+  if (!TEAM_MODES.has(room.mode)) return null;
   // Oyuncu gecerli bir takim sectiyse ona uy; aksi halde dengeli ata.
   return TEAMS.includes(requestedTeam) ? requestedTeam : assignTeam(room);
 }
@@ -238,7 +345,7 @@ function joinPlayer(room, socket, name, avatar, team) {
     id: socket.id,
     name: (name || 'Oyuncu').slice(0, 16),
     avatar: typeof avatar === 'string' ? avatar.slice(0, 20) : 'komando',
-    hp: 100, kills: 0, deaths: 0, protUntil: 0,
+    hp: 100, kills: 0, deaths: 0, wins: 0, protUntil: 0,
     pos: [0, 0, 0], yaw: 0, crouch: false,
     team: resolveTeam(room, team),
   });
@@ -289,8 +396,8 @@ io.on('connection', (socket) => {
       startGame(room);
     } else if (room.started) {
       const p = room.players.get(socket.id);
-      if (room.mode === 'team') {
-        p.hp = 0;
+      if (ELIM_MODES.has(room.mode)) {
+        p.hp = 0; // eleme modunda sonraki round'u bekle
       } else {
         spawnPlayer(room, p);
       }
@@ -304,13 +411,15 @@ io.on('connection', (socket) => {
       });
       for (const [id, pos] of room.packs) socket.emit('healthSpawn', { id, pos });
       socket.to(room.code).emit('playerJoined', playerInfo(p));
+      // Kilic: yeni katilanla birlikte mevcut round cozulebilir hale geldiyse bitir
+      checkRoundEndFFA(room);
     }
   });
 
   // Oyuncu takim secimi (oyuna girince, takim modunda)
   socket.on('pickTeam', (team, cb) => {
     const room = getRoom(socket);
-    if (!room || room.mode !== 'team') { if (typeof cb === 'function') cb({ error: 'Takim modu degil.' }); return; }
+    if (!room || !TEAM_MODES.has(room.mode)) { if (typeof cb === 'function') cb({ error: 'Takim modu degil.' }); return; }
     if (!TEAMS.includes(team)) { if (typeof cb === 'function') cb({ error: 'Gecersiz takim.' }); return; }
     const p = room.players.get(socket.id);
     if (!p) { if (typeof cb === 'function') cb({ error: 'Oyuncu yok.' }); return; }
@@ -363,23 +472,34 @@ io.on('connection', (socket) => {
     const targetId = data && data.targetId;
     const room = getRoom(socket);
     if (!room || !room.started) return;
-    if (room.mode === 'team' && !room.roundActive) return;
+    if (ELIM_MODES.has(room.mode) && !room.roundActive) return;
     const attacker = room.players.get(socket.id);
     const victim = targetId ? room.players.get(targetId) : null;
     if (!attacker || !victim) return;
     if (victim.id === attacker.id) return;
-    if (room.mode === 'team' && attacker.team && attacker.team === victim.team) return;
+    if (TEAM_MODES.has(room.mode) && attacker.team && attacker.team === victim.team) return;
     if (attacker.hp <= 0 || victim.hp <= 0) return;
     if (victim.protUntil && Date.now() < victim.protUntil) return; // dogum korumasi
 
-    const d = DAMAGE[gun] || DAMAGE.rifle;
-    const dmg = part === 'head' ? d.head : d.body;
+    let dmg;
+    if (gun === 'sword') {
+      // Kilic: sol tik (agir) 50, sag tik (hafif) 33 - sabit hasar (kafa/govde farki yok)
+      dmg = (data && data.melee === 'light') ? 33 : 50;
+    } else {
+      const d = DAMAGE[gun] || DAMAGE.rifle;
+      dmg = part === 'head' ? d.head : d.body;
+    }
     victim.hp = Math.max(0, victim.hp - dmg);
     io.to(room.code).emit('health', { id: victim.id, hp: victim.hp, part, by: attacker.id });
 
     if (victim.hp === 0) {
       attacker.kills++;
       victim.deaths++;
+      // Gun Game: her kill'de can dolar (sira sonraki silaha gecer)
+      if (room.mode === 'gungame') {
+        attacker.hp = 100;
+        io.to(room.code).emit('health', { id: attacker.id, hp: 100, part: null, by: attacker.id });
+      }
       io.to(room.code).emit('death', {
         victim: victim.id,
         killer: attacker.id,
@@ -388,6 +508,15 @@ io.on('connection', (socket) => {
       });
       if (room.mode === 'team') {
         checkRoundEnd(room);
+        return;
+      }
+      if (room.mode === 'kilic') {
+        checkRoundEndFFA(room);
+        return;
+      }
+      // Gun Game: son silahla (sniper) kill yapan maci kazanir
+      if (room.mode === 'gungame' && attacker.kills >= GUN_GAME_ORDER.length) {
+        endMatch(room, { winner: attacker.id, winnerName: attacker.name, mode: 'gungame', scores: scoreMap(room) });
         return;
       }
       const t = setTimeout(() => {
@@ -449,6 +578,7 @@ io.on('connection', (socket) => {
     } else {
       io.to(room.code).emit('playerLeft', { id: socket.id, name: p ? p.name : 'Oyuncu' });
       checkRoundEnd(room);
+      checkRoundEndFFA(room);
     }
   });
 });
