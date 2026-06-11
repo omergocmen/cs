@@ -65,6 +65,20 @@
     padding: 7px 8px; cursor: pointer; color: #aab6cc; text-align: left;
   }
   .mode-card.sel { border-color: #ffb13d; background: #1c2230; }
+
+  /* Takim secim ekrani butonlari */
+  .team-pick-row { display: flex; gap: 12px; margin-top: 8px; }
+  .team-pick {
+    flex: 1; padding: 22px 10px; border-radius: 12px; cursor: pointer;
+    background: #10141d; border: 2px solid #2e3a52; color: #d6deeb;
+    transition: transform .1s, border-color .15s, background .15s;
+  }
+  .team-pick:hover { transform: translateY(-3px); }
+  .team-pick strong { display: block; font-size: 20px; margin-bottom: 4px; }
+  .team-pick span { display: block; font-size: 12px; color: #8b97ad; }
+  .team-pick.police:hover, .team-pick.police.cur { border-color: #6db3ff; background: #16243a; color: #cfe4ff; }
+  .team-pick.bandit:hover, .team-pick.bandit.cur { border-color: #ff6b6b; background: #3a1c1c; color: #ffd6d6; }
+  .team-pick.cur::after { content: ' ✓ mevcut'; font-size: 11px; opacity: 0.8; }
   .mode-card strong { display: block; color: #fff; font-size: 12px; margin-bottom: 2px; }
   .mode-card span { display: block; font-size: 10px; color: #8b97ad; line-height: 1.2; }
   .map-row { grid-template-columns: repeat(auto-fit, minmax(82px, 1fr)); }
@@ -186,6 +200,31 @@
 
   #help { position: absolute; bottom: 24px; left: 50%; transform: translateX(-50%); color: rgba(255,255,255,0.45); font-size: 12px; text-align: center; }
 
+  /* Skor tablosu (TAB) */
+  #scoreboard {
+    position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%);
+    width: 440px; max-width: 92vw; display: none;
+    background: rgba(12, 15, 22, 0.92); border: 1px solid #2e3a52; border-radius: 12px;
+    padding: 16px 18px; box-shadow: 0 20px 60px rgba(0,0,0,0.7); z-index: 9;
+  }
+  #scoreboard h3 { text-align: center; color: #ffb13d; letter-spacing: 3px; font-size: 16px; margin-bottom: 12px; }
+  #scoreboard table { width: 100%; border-collapse: collapse; }
+  #scoreboard th { text-align: left; font-size: 11px; letter-spacing: 1px; color: #56627d; padding: 4px 8px; border-bottom: 1px solid #2e3a52; }
+  #scoreboard th:nth-child(2), #scoreboard th:nth-child(3),
+  #scoreboard td:nth-child(2), #scoreboard td:nth-child(3) { text-align: center; width: 64px; }
+  #scoreboard td { padding: 5px 8px; font-size: 14px; color: #d6deeb; border-bottom: 1px solid rgba(46,58,82,0.4); }
+  #scoreboard td.sb-name { font-weight: 600; color: #fff; }
+  #scoreboard td.sb-k { color: #6dff6d; font-weight: 700; }
+  #scoreboard td.sb-d { color: #ff8a8a; }
+  #scoreboard tr.me td { background: rgba(255,177,61,0.12); }
+  #scoreboard td.sb-empty { text-align: center; color: #56627d; }
+  .sb-team { margin-bottom: 12px; }
+  .sb-team:last-child { margin-bottom: 0; }
+  .sb-team-head { display: flex; justify-content: space-between; align-items: center; font-weight: 800; font-size: 14px; padding: 5px 8px; border-radius: 6px; margin-bottom: 4px; }
+  .sb-team-head span:last-child { font-size: 11px; font-weight: 600; opacity: 0.85; }
+  .sb-police .sb-team-head { background: rgba(109,179,255,0.18); color: #8fc4ff; border-left: 3px solid #6db3ff; }
+  .sb-bandit .sb-team-head { background: rgba(255,107,107,0.18); color: #ff9c9c; border-left: 3px solid #ff6b6b; }
+
   @media (max-height: 760px) {
     .overlay { align-items: flex-start; padding: 10px 0; overflow-y: auto; }
     .panel { padding: 16px 22px; max-height: none; }
@@ -258,6 +297,20 @@
   </div>
 </div>
 
+<!-- Takim secimi (takim modunda oyuna girince, sensitivity'den once) -->
+<div class="overlay" id="team-select" style="display:none">
+  <div class="panel">
+    <h1>TAKIM SEÇ</h1>
+    <div class="sub">Hangi tarafta savaşacaksın?</div>
+    <div class="team-pick-row">
+      <button class="team-pick police" data-pick="police"><strong>🚔 POLİS</strong><span>Mavi takım</span></button>
+      <button class="team-pick bandit" data-pick="bandit"><strong>🦹 HAYDUT</strong><span>Kırmızı takım</span></button>
+    </div>
+    <div class="sub" id="team-pick-info" style="margin-top:12px"></div>
+    <button class="btn-join" id="team-close" style="display:none; margin-top:14px;">VAZGEÇ / OYUNA DÖN</button>
+  </div>
+</div>
+
 <!-- Devam ekrani (pointer lock kaybinda) -->
 <div class="overlay" id="resume" style="display:none">
   <div class="panel">
@@ -295,7 +348,8 @@
   <div id="prot-hint">🛡️ DOĞUM KORUMASI</div>
   <div id="center-banner"></div>
   <div id="toast"></div>
-  <div id="help">WASD: hareket &nbsp;•&nbsp; SHIFT/C: egil &nbsp;•&nbsp; SPACE: zipla &nbsp;•&nbsp; SOL TIK: ates &nbsp;•&nbsp; SAG TIK: AWP zoom ac/kapat &nbsp;•&nbsp; R: sarjor &nbsp;•&nbsp; E: silah al &nbsp;•&nbsp; ESC: duraklat</div>
+  <div id="scoreboard"></div>
+  <div id="help">WASD: hareket &nbsp;•&nbsp; SHIFT/C: egil &nbsp;•&nbsp; SPACE: zipla &nbsp;•&nbsp; SOL TIK: ates &nbsp;•&nbsp; SAG TIK: AWP zoom &nbsp;•&nbsp; R: sarjor &nbsp;•&nbsp; E: silah al &nbsp;•&nbsp; M: takim &nbsp;•&nbsp; TAB: skor &nbsp;•&nbsp; ESC: duraklat</div>
 </div>
 
 <script src="/socket.io/socket.io.js"></script>

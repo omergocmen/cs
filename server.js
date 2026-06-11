@@ -7,7 +7,11 @@ const app = express();
 const server = http.createServer(app);
 const io = new Server(server);
 
-app.use(express.static(path.join(__dirname, 'public')));
+app.use(express.static(path.join(__dirname, 'public'), {
+  etag: false,
+  lastModified: false,
+  setHeaders: (res) => res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate'),
+}));
 
 const PORT = process.env.PORT || 3000;
 
@@ -151,7 +155,7 @@ function playerInfo(p) {
 
 function scoreMap(room) {
   const scores = {};
-  for (const p of room.players.values()) scores[p.id] = p.kills;
+  for (const p of room.players.values()) scores[p.id] = { k: p.kills, d: p.deaths, team: p.team || null };
   return scores;
 }
 
@@ -221,7 +225,13 @@ function checkRoundEnd(room) {
   room.timers.add(t);
 }
 
-function joinPlayer(room, socket, name, avatar) {
+function resolveTeam(room, requestedTeam) {
+  if (room.mode !== 'team') return null;
+  // Oyuncu gecerli bir takim sectiyse ona uy; aksi halde dengeli ata.
+  return TEAMS.includes(requestedTeam) ? requestedTeam : assignTeam(room);
+}
+
+function joinPlayer(room, socket, name, avatar, team) {
   socket.join(room.code);
   socket.data.code = room.code;
   room.players.set(socket.id, {
@@ -230,7 +240,7 @@ function joinPlayer(room, socket, name, avatar) {
     avatar: typeof avatar === 'string' ? avatar.slice(0, 20) : 'komando',
     hp: 100, kills: 0, deaths: 0, protUntil: 0,
     pos: [0, 0, 0], yaw: 0, crouch: false,
-    team: room.mode === 'team' ? assignTeam(room) : null,
+    team: resolveTeam(room, team),
   });
 }
 
@@ -262,17 +272,18 @@ io.on('connection', (socket) => {
       teamScores: { police: 0, bandit: 0 },
     };
     ROOMS.set(code, room);
-    joinPlayer(room, socket, name, avatar);
+    const team = data && typeof data === 'object' ? data.team : undefined;
+    joinPlayer(room, socket, name, avatar, team);
     cb({ ok: true, code, mode, arena, maxPlayers: room.maxPlayers });
   });
 
-  socket.on('joinRoom', ({ code, name, avatar }, cb) => {
+  socket.on('joinRoom', ({ code, name, avatar, team }, cb) => {
     if (typeof cb !== 'function') return;
     code = String(code || '').toUpperCase().trim();
     const room = ROOMS.get(code);
     if (!room) return cb({ error: 'Oda bulunamadı. Kodu kontrol et.' });
     if (room.players.size >= room.maxPlayers) return cb({ error: `Oda dolu (${room.maxPlayers}/${room.maxPlayers}).` });
-    joinPlayer(room, socket, name, avatar);
+    joinPlayer(room, socket, name, avatar, team);
     cb({ ok: true, code, mode: room.mode, arena: room.arena, maxPlayers: room.maxPlayers });
     if (!room.started && room.players.size >= 2) {
       startGame(room);
@@ -294,6 +305,27 @@ io.on('connection', (socket) => {
       for (const [id, pos] of room.packs) socket.emit('healthSpawn', { id, pos });
       socket.to(room.code).emit('playerJoined', playerInfo(p));
     }
+  });
+
+  // Oyuncu takim secimi (oyuna girince, takim modunda)
+  socket.on('pickTeam', (team, cb) => {
+    const room = getRoom(socket);
+    if (!room || room.mode !== 'team') { if (typeof cb === 'function') cb({ error: 'Takim modu degil.' }); return; }
+    if (!TEAMS.includes(team)) { if (typeof cb === 'function') cb({ error: 'Gecersiz takim.' }); return; }
+    const p = room.players.get(socket.id);
+    if (!p) { if (typeof cb === 'function') cb({ error: 'Oyuncu yok.' }); return; }
+    p.team = team;
+    // Secilen takimin dogum noktalarindan birine yerlestir
+    let idx = 0;
+    for (const o of room.players.values()) { if (o.id === socket.id) continue; if (o.team === team) idx++; }
+    const list = TEAM_SPAWNS[team];
+    const s = list[idx % list.length];
+    p.pos = s.pos.slice();
+    p.yaw = s.yaw;
+    const prot = room.roundActive ? SPAWN_PROTECT_MS : 0;
+    if (room.roundActive) { p.hp = 100; p.protUntil = Date.now() + SPAWN_PROTECT_MS; }
+    io.to(room.code).emit('teamChanged', { id: socket.id, team, pos: p.pos, yaw: p.yaw, hp: p.hp, prot });
+    if (typeof cb === 'function') cb({ ok: true, team, pos: p.pos, yaw: p.yaw, hp: p.hp });
   });
 
   // Pozisyon guncellemesi - rakibe aktar

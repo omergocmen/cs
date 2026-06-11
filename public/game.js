@@ -63,12 +63,12 @@ if (!AVATARS[myAvatar]) myAvatar = 'komando';
 if (!['duel', 'arena', 'team'].includes(gameMode)) gameMode = 'duel';
 if (!['depot', 'lanes', 'fortress', 'yard', 'crossfire'].includes(arenaChoice)) arenaChoice = 'depot';
 
-document.querySelectorAll('.mode-card').forEach((card) => {
+document.querySelectorAll('[data-mode]').forEach((card) => {
   card.classList.toggle('sel', card.dataset.mode === gameMode);
   card.onclick = () => {
     gameMode = card.dataset.mode;
     localStorage.setItem('cs_mode', gameMode);
-    document.querySelectorAll('.mode-card').forEach((c) => c.classList.toggle('sel', c === card));
+    document.querySelectorAll('[data-mode]').forEach((c) => c.classList.toggle('sel', c === card));
   };
 });
 
@@ -121,6 +121,7 @@ function showWaiting(code) {
   $('waiting').style.display = 'flex';
   $('code-display').textContent = code;
   $('waiting-hint').textContent = 'Rakip bekleniyor...';
+  teamChosen = false; // yeni macta takim secimi tekrar sorulsun
 }
 
 $('code-display').onclick = async () => {
@@ -389,6 +390,7 @@ const player = {
   lastShot: 0,
   zoomed: false,
   kills: 0,
+  deaths: 0,
   streak: 0,
 };
 
@@ -400,12 +402,28 @@ const GAME_KEYS = new Set([
 
 addEventListener('keydown', (e) => {
   if (gameRunning && GAME_KEYS.has(e.code)) e.preventDefault();
+  if (e.code === 'Tab') {
+    e.preventDefault();
+    if (gameRunning && !scoreboardPinned) { scoreboardPinned = true; showScoreboard(true); }
+    return;
+  }
+  if (e.code === 'KeyM') {
+    // Oyun sirasinda takim degistir (yalnizca takim modunda)
+    if (gameRunning && gameMode === 'team' && !selectingTeam) showTeamSelect(true);
+    return;
+  }
   keys[e.code] = true;
   if (e.code === 'KeyR') tryReload();
   if (e.code === 'KeyE') tryPickupWeapon();
 });
 addEventListener('keyup', (e) => {
   if (gameRunning && GAME_KEYS.has(e.code)) e.preventDefault();
+  if (e.code === 'Tab') {
+    e.preventDefault();
+    scoreboardPinned = false;
+    showScoreboard(false);
+    return;
+  }
   keys[e.code] = false;
 });
 
@@ -463,10 +481,61 @@ function hideResume() {
 }
 
 document.addEventListener('pointerlockchange', () => {
-  if (gameRunning && document.pointerLockElement !== document.body) showResume();
-  else hideResume();
+  if (gameRunning && document.pointerLockElement !== document.body) {
+    if (selectingTeam) return; // takim secim ekrani aciksa devam ekranini gosterme
+    showResume();
+  } else hideResume();
 });
 $('btn-resume').onclick = () => document.body.requestPointerLock();
+
+// ---- Takim secim ekrani (takim modunda, oyuna girince veya M ile) ----
+let teamChosen = false;
+let selectingTeam = false;
+
+function teamCounts() {
+  let police = 0, bandit = 0;
+  if (myTeam === 'police') police++; else if (myTeam === 'bandit') bandit++;
+  for (const e of enemies.values()) { if (e.team === 'police') police++; else if (e.team === 'bandit') bandit++; }
+  return { police, bandit };
+}
+
+// inGame=true: oyun sirasinda M ile acildi -> "Kapat" butonu gosterilir
+function showTeamSelect(inGame = false) {
+  selectingTeam = true;
+  if (inGame && document.pointerLockElement === document.body) document.exitPointerLock();
+  hideResume();
+  const ov = $('team-select');
+  ov.style.display = 'flex';
+  ov.querySelectorAll('.team-pick').forEach((b) => b.classList.toggle('cur', b.dataset.pick === myTeam));
+  const closeBtn = $('team-close');
+  if (closeBtn) closeBtn.style.display = inGame ? 'block' : 'none';
+  const c = teamCounts();
+  $('team-pick-info').textContent = `Şu an — 🚔 Polis: ${c.police}  •  🦹 Haydut: ${c.bandit}`;
+}
+
+function hideTeamSelect() {
+  selectingTeam = false;
+  $('team-select').style.display = 'none';
+}
+
+document.querySelectorAll('#team-select .team-pick').forEach((btn) => {
+  btn.onclick = () => {
+    const team = btn.dataset.pick;
+    socket.emit('pickTeam', team, (res) => {
+      if (!res || !res.ok) return;
+      myTeam = res.team;
+      teamChosen = true;
+      hideTeamSelect();
+      showResume('TAKIM SEÇİLDİ', `Takımın: ${team === 'police' ? '🚔 Polis' : '🦹 Haydut'} — oyuna girmek için tıkla`);
+    });
+  };
+});
+
+// Oyun sirasinda takim degistirmekten vazgec
+$('team-close').onclick = () => {
+  hideTeamSelect();
+  showResume('DEVAM', 'Oyuna dönmek için tıkla');
+};
 
 function toggleZoom(on) {
   if (!GUNS[player.gun].zoom) { player.zoomed = false; camera.fov = 75; camera.updateProjectionMatrix(); return; }
@@ -663,7 +732,7 @@ function createEnemy(info) {
     id: info.id, name: info.name, group, head, body, legs, armL, armR,
     targetPos: new THREE.Vector3(info.pos[0], info.pos[1], info.pos[2]),
     targetYaw: info.yaw || 0,
-    hp: info.hp, kills: info.kills || 0, alive: info.hp > 0, protUntil: 0, crouch: !!info.crouch, nameTag, team: info.team || null,
+    hp: info.hp, kills: info.kills || 0, deaths: info.deaths || 0, alive: info.hp > 0, protUntil: 0, crouch: !!info.crouch, nameTag, team: info.team || null,
   };
   setEnemyCrouch(enemy, !!info.crouch);
   enemies.set(info.id, enemy);
@@ -673,6 +742,15 @@ function createEnemy(info) {
 function setEnemyCrouch(enemy, crouch) {
   enemy.crouch = crouch;
   enemy.group.scale.y = crouch ? 0.72 : 1;
+}
+
+// Rakibin takimini degistir (isim etiketi rengini de gunceller)
+function setEnemyTeam(enemy, team) {
+  enemy.team = team;
+  if (enemy.nameTag) enemy.group.remove(enemy.nameTag);
+  const tag = makeNameSprite(enemy.name, team);
+  enemy.group.add(tag);
+  enemy.nameTag = tag;
 }
 
 function removeEnemy(id) {
@@ -775,6 +853,31 @@ function resolveCollisions() {
   const lim = MAP_SIZE / 2 - 0.6 - PLAYER_RADIUS;
   p.x = Math.max(-lim, Math.min(lim, p.x));
   p.z = Math.max(-lim, Math.min(lim, p.z));
+}
+
+// Bir (x,z) noktasi bir duvar/obje icinde mi? (dogum kontrolu icin)
+function isBlockedAt(x, z) {
+  for (const b of colliders) {
+    if (b.h <= 0.2) continue; // ustune basilabilen cok alcak nesneleri yok say
+    if (x > b.x - b.w / 2 - PLAYER_RADIUS && x < b.x + b.w / 2 + PLAYER_RADIUS &&
+        z > b.z - b.d / 2 - PLAYER_RADIUS && z < b.z + b.d / 2 + PLAYER_RADIUS) return true;
+  }
+  const lim = MAP_SIZE / 2 - 0.6 - PLAYER_RADIUS;
+  return x < -lim || x > lim || z < -lim || z > lim;
+}
+
+// Dogum noktasi bir engelin icine denk geldiyse en yakin bos noktaya kaydir.
+// (Spawn'da duvara/objeye sikisma hatasini engeller.)
+function safeSpawnPos(x, z) {
+  if (!isBlockedAt(x, z)) return [x, z];
+  for (let r = 0.6; r <= 12; r += 0.6) {
+    for (let i = 0; i < 16; i++) {
+      const a = (i / 16) * Math.PI * 2;
+      const nx = x + Math.cos(a) * r, nz = z + Math.sin(a) * r;
+      if (!isBlockedAt(nx, nz)) return [nx, nz];
+    }
+  }
+  return [x, z]; // cok nadir: tamamen kapali, orijinali birak
 }
 
 // ================== SES (WebAudio) ==================
@@ -1079,6 +1182,63 @@ function updateScoreHUD() {
   $('score-me-name').textContent = myName;
   $('score-en-name').textContent = leader ? leader.name : 'Rakip';
 }
+// Sunucudan gelen skor haritasini ({id: {k, d, team}}) oyuncu+dusmanlara uygula
+function applyScores(scores) {
+  if (!scores) return;
+  const me = scores[socket.id];
+  if (me) { player.kills = me.k; player.deaths = me.d; }
+  for (const enemy of enemies.values()) {
+    const s = scores[enemy.id];
+    if (s) { enemy.kills = s.k; enemy.deaths = s.d; if (s.team) enemy.team = s.team; }
+  }
+}
+
+// TAB skor tablosu: kim kac kisi vurdu / kac kez oldu
+function renderScoreboard() {
+  const board = $('scoreboard');
+  if (!board) return;
+  const rows = [
+    { id: socket.id, name: myName + ' (sen)', kills: player.kills, deaths: player.deaths, team: myTeam, me: true },
+    ...[...enemies.values()].map((e) => ({ id: e.id, name: e.name, kills: e.kills, deaths: e.deaths, team: e.team, me: false })),
+  ];
+
+  const rowHtml = (r) => `
+    <tr class="${r.me ? 'me' : ''}">
+      <td class="sb-name">${escapeHtml(r.name)}</td>
+      <td class="sb-k">${r.kills || 0}</td>
+      <td class="sb-d">${r.deaths || 0}</td>
+    </tr>`;
+  const tableHead = `<tr><th>Oyuncu</th><th>Vurus</th><th>Olum</th></tr>`;
+
+  if (gameMode === 'team') {
+    const make = (team, label, cls) => {
+      const list = rows.filter((r) => r.team === team).sort((a, b) => b.kills - a.kills);
+      const total = list.reduce((s, r) => s + (r.kills || 0), 0);
+      return `
+        <div class="sb-team ${cls}">
+          <div class="sb-team-head"><span>${label}</span><span>Round: ${teamScores[team] || 0} • Vurus: ${total}</span></div>
+          <table>${tableHead}${list.map(rowHtml).join('') || '<tr><td colspan="3" class="sb-empty">—</td></tr>'}</table>
+        </div>`;
+    };
+    board.innerHTML = `<h3>SKOR TABLOSU</h3>${make('police', '🚔 Polis', 'sb-police')}${make('bandit', '🦹 Haydut', 'sb-bandit')}`;
+  } else {
+    rows.sort((a, b) => b.kills - a.kills);
+    board.innerHTML = `<h3>SKOR TABLOSU</h3><table>${tableHead}${rows.map(rowHtml).join('')}</table>`;
+  }
+}
+
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+
+let scoreboardPinned = false;
+function showScoreboard(on) {
+  const board = $('scoreboard');
+  if (!board) return;
+  if (on) renderScoreboard();
+  board.style.display = on ? 'block' : 'none';
+}
+
 function killFeed(text) {
   const div = document.createElement('div');
   div.className = 'feed-item';
@@ -1108,7 +1268,8 @@ socket.on('start', ({ players, weapons, arena, mode, round, teamScores: scores }
 
   for (const info of players) {
     if (info.id === socket.id) {
-      player.pos.set(info.pos[0], info.pos[1], info.pos[2]);
+      const [sx, sz] = safeSpawnPos(info.pos[0], info.pos[2]);
+      player.pos.set(sx, info.pos[1], sz);
       player.yaw = info.yaw;
       player.pitch = 0;
       player.hp = info.hp;
@@ -1136,7 +1297,12 @@ socket.on('start', ({ players, weapons, arena, mode, round, teamScores: scores }
   // (tarayıcı kısıtı). Otomatik açmaya çalışmak sessizce reddedilir ve oyuncu
   // donar. Bu yüzden "tıkla ve başla" ekranını gösteriyoruz; kilit btn-resume
   // tıklamasıyla açılır.
-  showResume('SAVAS BASLADI', 'Oyuna girmek icin tikla');
+  // Takim modunda once takim secim ekrani, ardindan sensitivity/baslat ekrani.
+  if (gameMode === 'team' && !teamChosen) {
+    showTeamSelect();
+  } else {
+    showResume('SAVAS BASLADI', 'Oyuna girmek icin tikla');
+  }
 });
 
 socket.on('enemyMove', (d) => {
@@ -1173,9 +1339,9 @@ socket.on('health', ({ id, hp, part }) => {
 });
 
 socket.on('death', ({ victim, killer, headshot, scores }) => {
-  for (const enemy of enemies.values()) enemy.kills = scores[enemy.id] ?? enemy.kills;
-  player.kills = scores[socket.id] ?? player.kills;
+  applyScores(scores);
   updateScoreHUD();
+  if ($('scoreboard').style.display === 'block') renderScoreboard();
   if (killer === socket.id && victim !== socket.id) {
     player.streak++;
     if (player.streak >= 3) centerBanner(`${player.streak} SERI!`, 'gold', 1100);
@@ -1191,6 +1357,7 @@ socket.on('death', ({ victim, killer, headshot, scores }) => {
     player.hp = 0;
     updateHpHUD();
     $('death-overlay').style.display = 'flex';
+    showScoreboard(true); // oldugunde skor tablosunu goster
     if (gameMode === 'team') {
       $('respawn-count').textContent = '';
       $('death-overlay').querySelector('p').textContent = 'Round bitene kadar bekliyorsun...';
@@ -1215,7 +1382,8 @@ socket.on('death', ({ victim, killer, headshot, scores }) => {
 
 socket.on('respawn', ({ id, pos, yaw, hp, prot }) => {
   if (id === socket.id) {
-    player.pos.set(pos[0], pos[1], pos[2]);
+    const [sx, sz] = safeSpawnPos(pos[0], pos[2]);
+    player.pos.set(sx, pos[1], sz);
     player.yaw = yaw || 0;
     player.pitch = 0;
     player.vel.set(0, 0, 0);
@@ -1225,6 +1393,7 @@ socket.on('respawn', ({ id, pos, yaw, hp, prot }) => {
     player.alive = true;
     switchGun(player.gun); // şarjörü doldur
     $('death-overlay').style.display = 'none';
+    if (!scoreboardPinned) showScoreboard(false);
     updateHpHUD();
     if (prot) {
       const ph = $('prot-hint');
@@ -1245,9 +1414,35 @@ socket.on('respawn', ({ id, pos, yaw, hp, prot }) => {
   }
 });
 
+socket.on('teamChanged', ({ id, team, pos, yaw, hp, prot }) => {
+  if (id === socket.id) {
+    myTeam = team;
+    if (pos) { const [sx, sz] = safeSpawnPos(pos[0], pos[2]); player.pos.set(sx, pos[1] || 0, sz); }
+    if (typeof yaw === 'number') player.yaw = yaw;
+    if (typeof hp === 'number') { player.hp = hp; player.alive = hp > 0; }
+    updateHpHUD(); updateScoreHUD();
+    if (prot) {
+      const ph = $('prot-hint');
+      ph.style.display = 'block';
+      clearTimeout(ph._timer);
+      ph._timer = setTimeout(() => (ph.style.display = 'none'), prot);
+    }
+  } else {
+    const enemy = enemyById(id);
+    if (enemy) {
+      setEnemyTeam(enemy, team);
+      if (pos) { enemy.group.position.set(pos[0], pos[1] || 0, pos[2]); enemy.targetPos.set(pos[0], pos[1] || 0, pos[2]); }
+      if (typeof yaw === 'number') enemy.targetYaw = yaw;
+      if (typeof hp === 'number') { enemy.hp = hp; enemy.alive = hp > 0; }
+    }
+  }
+  if ($('scoreboard').style.display === 'block') renderScoreboard();
+});
+
 socket.on('roundEnd', ({ winner, teamScores: scores, nextRoundIn }) => {
   teamScores = scores || teamScores;
   updateScoreHUD();
+  showScoreboard(true); // round sonu skor tablosunu goster
   const name = winner === 'police' ? 'Polis' : 'Haydut';
   centerBanner(`${name.toUpperCase()} KAZANDI`, winner === 'police' ? 'blue' : 'red', nextRoundIn || 3500);
   toast(`${name} round kazandi!`, nextRoundIn || 3500);
@@ -1263,7 +1458,8 @@ socket.on('roundStart', ({ players, weapons, round, teamScores: scores }) => {
   removeAllEnemies();
   for (const info of players) {
     if (info.id === socket.id) {
-      player.pos.set(info.pos[0], info.pos[1], info.pos[2]);
+      const [sx, sz] = safeSpawnPos(info.pos[0], info.pos[2]);
+      player.pos.set(sx, info.pos[1], sz);
       player.yaw = info.yaw || 0;
       player.pitch = 0;
       player.vel.set(0, 0, 0);
@@ -1274,6 +1470,7 @@ socket.on('roundStart', ({ players, weapons, round, teamScores: scores }) => {
       myTeam = info.team || myTeam;
       switchGun('rifle');
       $('death-overlay').style.display = 'none';
+      if (!scoreboardPinned) showScoreboard(false);
       $('death-overlay').querySelector('p').innerHTML = '<span id="respawn-count">3</span> saniye sonra yeniden dogacaksin...';
       updateHpHUD();
     } else {
@@ -1326,12 +1523,14 @@ socket.on('playerJoined', (info) => {
   if (info.id !== socket.id && !enemyById(info.id)) createEnemy(info);
   toast(`${info.name} arenaya katildi.`);
   updateScoreHUD();
+  if ($('scoreboard').style.display === 'block') renderScoreboard();
 });
 
 socket.on('playerLeft', ({ id, name }) => {
   removeEnemy(id);
   toast(`${name} oyundan ayrildi.`);
   updateScoreHUD();
+  if ($('scoreboard').style.display === 'block') renderScoreboard(); // listeden sil
 });
 
 socket.on('opponentLeft', ({ name }) => {
