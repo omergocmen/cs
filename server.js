@@ -75,8 +75,9 @@ const DAMAGE = {
   kingrifle: { head: 100, body: 100 },
 };
 const KING_HP = 300;
-const KING_SPAWN = { pos: [0, 0, 6], yaw: 0 };
+const KING_SPAWN = { pos: [0, 0, 0], yaw: 0 };
 const KING_FIRE_DELAY_MS = 950;
+const KING_START_PROTECT_MS = 3000;
 const HEALTH_AMOUNT = 40;
 const RESPAWN_MS = 3000;
 const WEAPON_RESPAWN_MS = 25000;
@@ -165,7 +166,7 @@ function startGame(room) {
   const players = [...room.players.values()].map(playerInfo);
   const weapons = [...room.weapons.values()];
 
-  io.to(room.code).emit('start', { players, weapons, arena: room.arena, mode: room.mode, round: room.round, teamScores: room.teamScores });
+  io.to(room.code).emit('start', { players, weapons, arena: room.arena, mode: room.mode, round: room.round, teamScores: room.teamScores, kingProtectMs: room.mode === 'kral' ? KING_START_PROTECT_MS : 0 });
   if (!NO_HEALTH_MODES.has(room.mode)) scheduleHealthPack(room);
   if (room.mode === 'domination') startDomination(room);
 }
@@ -237,7 +238,7 @@ function resetRoundPlayers(room) {
     p.pos = s.pos.slice();
     p.yaw = s.yaw;
     p.crouch = false;
-    p.protUntil = 0;
+    p.protUntil = isKing ? Date.now() + KING_START_PROTECT_MS : 0;
     i++;
   }
 }
@@ -323,6 +324,7 @@ function startNextRound(room) {
     players: [...room.players.values()].map(playerInfo),
     weapons: [...room.weapons.values()],
     teamScores: room.teamScores,
+    kingProtectMs: room.mode === 'kral' ? KING_START_PROTECT_MS : 0,
   });
 }
 
@@ -476,6 +478,7 @@ io.on('connection', (socket) => {
         mode: room.mode,
         round: room.round,
         teamScores: room.teamScores,
+        kingProtectMs: room.mode === 'kral' ? Math.max(0, KING_START_PROTECT_MS) : 0,
       });
       for (const [id, pos] of room.packs) socket.emit('healthSpawn', { id, pos });
       socket.to(room.code).emit('playerJoined', playerInfo(p));

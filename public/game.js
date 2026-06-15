@@ -179,7 +179,7 @@ const MODE_INFO = {
     goal: 'Iki oyuncu genis ve uzun bir hatta sadece AWP ile duello atar.',
     how: [
       'Oda 2 kisiliktir; herkes otomatik AWP ile baslar.',
-      'Yerde silah yoktur, mod sadece niÅŸan ve pozisyon uzerinedir.',
+      'Yerde silah yoktur, mod sadece nisan ve pozisyon uzerinedir.',
       'Alan uzun ve genistir; yol gibi gorunmez ama uzun hat mantigi verir.',
       'Oldugunde 3 saniye sonra kendi tarafinda yeniden dogarsin.',
     ],
@@ -345,7 +345,7 @@ function applyArenaTheme(arena = 'depot') {
 const camera = new THREE.PerspectiveCamera(75, innerWidth / innerHeight, 0.05, 300);
 const renderer = new THREE.WebGLRenderer({ antialias: true });
 renderer.setSize(innerWidth, innerHeight);
-renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+renderer.setPixelRatio(Math.min(devicePixelRatio, 1.5));
 renderer.shadowMap.enabled = true;
 renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 document.body.appendChild(renderer.domElement);
@@ -354,6 +354,7 @@ addEventListener('resize', () => {
   camera.aspect = innerWidth / innerHeight;
   camera.updateProjectionMatrix();
   renderer.setSize(innerWidth, innerHeight);
+  renderer.setPixelRatio(Math.min(devicePixelRatio, 1.5));
 });
 
 // Işıklar
@@ -361,7 +362,7 @@ scene.add(new THREE.HemisphereLight(0xcfe5ff, 0x4a4434, 0.85));
 const sun = new THREE.DirectionalLight(0xfff2d8, 1.4);
 sun.position.set(30, 50, 20);
 sun.castShadow = true;
-sun.shadow.mapSize.set(2048, 2048);
+sun.shadow.mapSize.set(1024, 1024);
 sun.shadow.camera.left = -45; sun.shadow.camera.right = 45;
 sun.shadow.camera.top = 45; sun.shadow.camera.bottom = -45;
 sun.shadow.camera.far = 150;
@@ -481,9 +482,9 @@ function sniperNest(x, z, sx, sz) {
 }
 
 function applyArenaLayout(arena = 'depot') {
-  applyArenaTheme(gameMode === 'awp' ? 'lanes' : arena);
+  applyArenaTheme(gameMode === 'awp' ? 'lanes' : gameMode === 'kral' ? 'fortress' : arena);
   clearArenaLayout();
-  setBaseInteriorEnabled(gameMode !== 'awp');
+  setBaseInteriorEnabled(gameMode !== 'awp' && gameMode !== 'kral');
   if (gameMode === 'awp') {
     arenaBox(-16, 0, 1.2, 46, 2.2, 0x6f7f91);
     arenaBox(16, 0, 1.2, 46, 2.2, 0x6f7f91);
@@ -496,6 +497,32 @@ function applyArenaLayout(arena = 'depot') {
     arenaBox(7, -24, 8, 1.2, 1.55, 0x26345f);
     arenaBox(-12, 22, 1.2, 5, 1.6, 0x26345f);
     arenaBox(12, -22, 1.2, 5, 1.6, 0x26345f);
+  } else if (gameMode === 'kral') {
+    arenaBox(0, 0, 10, 10, 0.8, 0x6b2630);
+    arenaBox(-5.8, -5.8, 5.2, 1.1, 2.75, 0x7a3340);
+    arenaBox(-5.8, -5.8, 1.1, 5.2, 2.75, 0x7a3340);
+    arenaBox(5.8, -5.8, 5.2, 1.1, 2.75, 0x7a3340);
+    arenaBox(5.8, -5.8, 1.1, 5.2, 2.75, 0x7a3340);
+    arenaBox(-5.8, 5.8, 5.2, 1.1, 2.75, 0x7a3340);
+    arenaBox(-5.8, 5.8, 1.1, 5.2, 2.75, 0x7a3340);
+    arenaBox(5.8, 5.8, 5.2, 1.1, 2.75, 0x7a3340);
+    arenaBox(5.8, 5.8, 1.1, 5.2, 2.75, 0x7a3340);
+    arenaBox(0, -3.2, 3.4, 0.9, 1.15, 0xb67c39);
+    arenaBox(0, 3.2, 3.4, 0.9, 1.15, 0xb67c39);
+    arenaBox(-3.2, 0, 0.9, 3.4, 1.15, 0xb67c39);
+    arenaBox(3.2, 0, 0.9, 3.4, 1.15, 0xb67c39);
+    arenaBox(0, -15, 8, 1.3, 1.45, 0x4c5664);
+    arenaBox(0, 15, 8, 1.3, 1.45, 0x4c5664);
+    arenaBox(-15, 0, 1.3, 8, 1.45, 0x4c5664);
+    arenaBox(15, 0, 1.3, 8, 1.45, 0x4c5664);
+    arenaBox(-19, -19, 6, 1.2, 1.8, 0x26345f);
+    arenaBox(19, 19, 6, 1.2, 1.8, 0x26345f);
+    arenaBox(-19, 19, 1.2, 6, 1.8, 0x26345f);
+    arenaBox(19, -19, 1.2, 6, 1.8, 0x26345f);
+    arenaBox(-10, -20, 4, 2, 1.15, 0xb67c39);
+    arenaBox(10, 20, 4, 2, 1.15, 0xb67c39);
+    arenaBox(-20, 10, 2, 4, 1.15, 0xb67c39);
+    arenaBox(20, -10, 2, 4, 1.15, 0xb67c39);
   } else if (arena === 'lanes') {
     arenaBox(0, -18, 18, 1.2, 2.4, 0xb67c39);
     arenaBox(0, 18, 18, 1.2, 2.4, 0xb67c39);
@@ -1116,6 +1143,7 @@ function makeZoneLabel(name) {
 
 function buildDomZones() {
   clearDomZones();
+  stopTeamSpectate();
   for (const z of DOM_ZONE_DEFS) {
     const grp = new THREE.Group();
     const gy = groundHeightAt(z.pos[0], z.pos[2]);
@@ -1534,13 +1562,20 @@ function switchGun(type) {
 
 // ================== YERDEN ALMA ==================
 let nearbyWeaponId = null;
+let nextPickupCheckAt = 0;
 
 function tryPickupWeapon() {
   if (nearbyWeaponId !== null) socket.emit('pickupWeapon', nearbyWeaponId);
 }
 
-function checkPickups() {
-  if (!player.alive) return;
+function checkPickups(now = performance.now()) {
+  if (!player.alive) {
+    nearbyWeaponId = null;
+    $('pickup-hint').style.display = 'none';
+    return;
+  }
+  if (now < nextPickupCheckAt) return;
+  nextPickupCheckAt = now + 100;
   // Silahlar: yakındaysa ipucu göster
   nearbyWeaponId = null;
   let nearest = Infinity;
@@ -1706,8 +1741,62 @@ function damageFlash() {
   v._timer = setTimeout(() => (v.style.opacity = 0), 350);
 }
 
+let spectateTargetId = null;
+
+function livingTeamMates() {
+  if (gameMode !== 'team' || !myTeam) return [];
+  return [...enemies.values()].filter((e) => e.team === myTeam && e.alive);
+}
+
+function stopTeamSpectate() {
+  spectateTargetId = null;
+  const hint = $('spectate-hint');
+  if (hint) hint.style.display = 'none';
+  if (!player.zoomed) gunGroup.visible = true;
+}
+
+function startTeamSpectate() {
+  if (gameMode !== 'team') return false;
+  const mates = livingTeamMates();
+  if (!mates.length) return false;
+  spectateTargetId = mates[0].id;
+  const hint = $('spectate-hint');
+  if (hint) hint.style.display = 'block';
+  gunGroup.visible = false;
+  return true;
+}
+
+function updateTeamSpectateCamera() {
+  if (!spectateTargetId || gameMode !== 'team' || player.alive) return false;
+  let target = enemyById(spectateTargetId);
+  if (!target || !target.alive) {
+    target = livingTeamMates()[0] || null;
+    spectateTargetId = target ? target.id : null;
+  }
+  if (!target) {
+    const hint = $('spectate-hint');
+    if (hint) hint.style.display = 'none';
+    return false;
+  }
+
+  const yaw = target.targetYaw || target.group.rotation.y || 0;
+  const fwd = new THREE.Vector3(-Math.sin(yaw), 0, -Math.cos(yaw));
+  const targetPos = target.group.position.clone();
+  const camPos = targetPos.clone().addScaledVector(fwd, -4.8);
+  camPos.y += 2.35;
+  camera.position.lerp(camPos, 0.22);
+  camera.lookAt(targetPos.x, targetPos.y + 1.45, targetPos.z);
+  gunGroup.visible = false;
+  const hint = $('spectate-hint');
+  if (hint) {
+    hint.textContent = `TAKIM ARKADASINI IZLIYORSUN: ${target.name}`;
+    hint.style.display = 'block';
+  }
+  return true;
+}
+
 // ================== SOKET OLAYLARI ==================
-socket.on('start', ({ players, weapons, arena, mode, round, teamScores: scores }) => {
+socket.on('start', ({ players, weapons, arena, mode, round, teamScores: scores, kingProtectMs }) => {
   gameMode = mode || gameMode;
   currentRound = round || currentRound;
   teamScores = scores || teamScores;
@@ -1729,6 +1818,7 @@ socket.on('start', ({ players, weapons, arena, mode, round, teamScores: scores }
       player.hp = info.hp;
       player.maxHp = info.maxHp || 100;
       player.isKing = !!info.isKing;
+      player.protUntil = player.isKing && kingProtectMs ? Date.now() + kingProtectMs : 0;
       player.alive = info.hp > 0;
       player.kills = info.kills;
       myTeam = info.team || null;
@@ -1736,7 +1826,8 @@ socket.on('start', ({ players, weapons, arena, mode, round, teamScores: scores }
       player.eyeHeight = STAND_EYE_HEIGHT;
       equipForMode();
     } else {
-      createEnemy(info);
+      const enemy = createEnemy(info);
+      if (enemy.isKing && kingProtectMs) enemy.protUntil = Date.now() + kingProtectMs;
     }
   }
   refreshTeamVisibility(); // myTeam belli oldu -> dusman etiketlerini gizle
@@ -1760,6 +1851,16 @@ socket.on('start', ({ players, weapons, arena, mode, round, teamScores: scores }
     : gameMode === 'awp' ? 'AWP 1v1 basladi. Uzun hatti tut!'
     : gameMode === 'arena' ? 'Arena basladi!' : 'Rakip geldi! Savas basladi!';
   toast(startMsg);
+  if (gameMode === 'kral' && player.isKing && kingProtectMs) {
+    const ph = $('prot-hint');
+    ph.textContent = 'KRAL KORUMASI';
+    ph.style.display = 'block';
+    clearTimeout(ph._timer);
+    ph._timer = setTimeout(() => {
+      ph.style.display = 'none';
+      ph.textContent = 'DOGUM KORUMASI';
+    }, kingProtectMs);
+  }
   if (gameMode === 'kilic') {
     setTimeout(() => toast('SOL TIK: ağır vuruş 50 (yavaş) ⚔️  •  SAĞ TIK: hızlı vuruş 33 🗡️', 4000), 2700);
   }
@@ -1842,6 +1943,12 @@ socket.on('death', ({ victim, killer, headshot, scores }) => {
     player.alive = false;
     player.hp = 0;
     updateHpHUD();
+    if (gameMode === 'team' && startTeamSpectate()) {
+      $('death-overlay').style.display = 'none';
+      if (!scoreboardPinned) showScoreboard(false);
+      toast('Takim arkadasini izliyorsun.');
+      return;
+    }
     $('death-overlay').style.display = 'flex';
     showScoreboard(true); // oldugunde skor tablosunu goster
     if (gameMode === 'team' || gameMode === 'kilic') {
@@ -1879,6 +1986,7 @@ socket.on('respawn', ({ id, pos, yaw, hp, maxHp, isKing, prot }) => {
     player.maxHp = maxHp || 100;
     player.isKing = !!isKing;
     player.alive = true;
+    stopTeamSpectate();
     if (gameMode === 'gungame') applyGunGameWeapon(); else equipForMode();
     $('death-overlay').style.display = 'none';
     if (!scoreboardPinned) showScoreboard(false);
@@ -1986,7 +2094,7 @@ socket.on('gameOver', ({ winner, winnerName, winnerTeam, scores }) => {
   toast('Yeni maç 5 saniye içinde başlıyor...', 4800);
 });
 
-socket.on('roundStart', ({ players, weapons, round, teamScores: scores }) => {
+socket.on('roundStart', ({ players, weapons, round, teamScores: scores, kingProtectMs }) => {
   currentRound = round || currentRound + 1;
   teamScores = scores || teamScores;
   for (const w of [...groundWeapons.values()]) scene.remove(w.mesh);
@@ -2004,17 +2112,20 @@ socket.on('roundStart', ({ players, weapons, round, teamScores: scores }) => {
       player.hp = info.hp;
       player.maxHp = info.maxHp || 100;
       player.isKing = !!info.isKing;
+      player.protUntil = player.isKing && kingProtectMs ? Date.now() + kingProtectMs : 0;
       player.alive = info.hp > 0;
       player.crouch = false;
       player.eyeHeight = STAND_EYE_HEIGHT;
       myTeam = info.team || myTeam;
+      stopTeamSpectate();
       equipForMode();
       $('death-overlay').style.display = 'none';
       if (!scoreboardPinned) showScoreboard(false);
       $('death-overlay').querySelector('p').innerHTML = '<span id="respawn-count">3</span> saniye sonra yeniden dogacaksin...';
       updateHpHUD();
     } else {
-      createEnemy(info);
+      const enemy = createEnemy(info);
+      if (enemy.isKing && kingProtectMs) enemy.protUntil = Date.now() + kingProtectMs;
     }
   }
   refreshTeamVisibility(); // dusman etiketlerini gizle
@@ -2024,6 +2135,16 @@ socket.on('roundStart', ({ players, weapons, round, teamScores: scores }) => {
   updateScoreHUD();
   centerBanner(gameMode === 'kral' && player.isKing ? `ROUND ${currentRound}: KRAL SENSIN` : `ROUND ${currentRound}`, 'gold', 1000);
   toast(gameMode === 'kral' ? (player.isKing ? '300 canla hayatta kal.' : 'Krali avla.') : `Round ${currentRound} basladi!`);
+  if (gameMode === 'kral' && player.isKing && kingProtectMs) {
+    const ph = $('prot-hint');
+    ph.textContent = 'KRAL KORUMASI';
+    ph.style.display = 'block';
+    clearTimeout(ph._timer);
+    ph._timer = setTimeout(() => {
+      ph.style.display = 'none';
+      ph.textContent = 'DOGUM KORUMASI';
+    }, kingProtectMs);
+  }
 });
 
 socket.on('healthSpawn', ({ id, pos }) => {
@@ -2117,6 +2238,7 @@ function animate() {
   requestAnimationFrame(animate);
   const dt = Math.min(clock.getDelta(), 0.05);
   const now = performance.now();
+  const wallNow = Date.now();
   updateNetStats(now);
 
   if (gameRunning) {
@@ -2229,12 +2351,13 @@ function animate() {
         enemy.group.rotation.y += dy * Math.min(1, dt * 14);
       }
       // Doğum koruması: model yanıp söner
-      if (enemy.protUntil > Date.now()) {
+      if (enemy.protUntil > wallNow) {
         enemy.group.visible = Math.floor(now / 90) % 2 === 0;
       } else if (!enemy.group.visible) {
         enemy.group.visible = true;
       }
     }
+    updateTeamSpectateCamera();
 
     // Yerdeki nesne animasyonları
     for (const w of groundWeapons.values()) {
@@ -2248,10 +2371,10 @@ function animate() {
     // Domination bölge halkaları yavaşça döner (hafif)
     for (const z of domZones) z.ring.rotation.z += dt * 0.6;
 
-    checkPickups();
+    checkPickups(now);
 
     // Pozisyon gönder
-    if (now - lastSend > SEND_INTERVAL) {
+    if (player.alive && now - lastSend > SEND_INTERVAL) {
       lastSend = now;
       socket.volatile.emit('move', {
         p: [+player.pos.x.toFixed(2), +player.pos.y.toFixed(2), +player.pos.z.toFixed(2)],

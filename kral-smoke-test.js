@@ -83,10 +83,15 @@ function waitForServer() {
     assert(kings.length === 1, 'tek kral var');
     assert(kings[0].hp === 300 && kings[0].maxHp === 300, 'kral 300 canla baslar');
     assert(state.players.filter((p) => !p.isKing).every((p) => p.hp === 100 && p.maxHp === 100), 'normaller 100 canla baslar');
+    assert(state.kingProtectMs === 3000, 'kral baslangicta 3 sn korunur');
 
     const sockets = { [a.id]: a, [b.id]: b, [c.id]: c };
     const kingId = kings[0].id;
     const [normalA, normalB] = state.players.filter((p) => !p.isKing).map((p) => p.id);
+
+    const protectedHit = waitHealth(sockets[kingId], kingId, 300);
+    sockets[normalB].emit('hit', { part: 'head', targetId: kingId, gun: 'rifle' });
+    assert(!(await protectedHit), 'koruma suresinde kral hasar almaz');
 
     const friendlyHit = waitHealth(sockets[normalB], normalB, 300);
     sockets[normalA].emit('hit', { part: 'head', targetId: normalB, gun: 'rifle' });
@@ -102,6 +107,7 @@ function waitForServer() {
     assert(!(await fastSecondHit), 'kral 950ms altinda ikinci hasar yazamaz');
 
     const roundEnd = once(sockets[kingId], 'roundEnd');
+    await new Promise((resolve) => setTimeout(resolve, 2900));
     sockets[normalB].emit('hit', { part: 'head', targetId: kingId, gun: 'rifle' });
     await new Promise((resolve) => setTimeout(resolve, 100));
     sockets[normalB].emit('hit', { part: 'head', targetId: kingId, gun: 'rifle' });
