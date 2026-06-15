@@ -42,7 +42,7 @@ function assert(cond, msg) {
   a.emit('hit', { part: 'head', targetId: b.id });
   const d = await death;
   assert(d.victim === b.id && d.headshot, 'kafadan vurus oldurdu');
-  assert(d.scores[a.id] === 1, 'skor islendi');
+  assert((d.scores[a.id]?.k ?? d.scores[a.id]) === 1, 'skor islendi');
 
   const r = await Promise.race([respawn, new Promise((res) => setTimeout(() => res(null), 5000))]);
   assert(r && r.hp === 100, 'olen oyuncu 3 sn sonra 100 can ile dogdu');

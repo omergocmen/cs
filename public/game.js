@@ -27,6 +27,12 @@ const GUNS = {
     snd: { freq: 500, dur: 0.42, vol: 0.7, thump: 55 },
     color: 0x2e5e2e,
   },
+  kingrifle: {
+    name: 'KRAL 6 PATLAR', mag: 6, fireDelay: 950, reloadTime: 3.1, auto: false,
+    spread: 0.006, zoom: false, pellets: 1, kick: 0.075,
+    snd: { freq: 380, dur: 0.36, vol: 0.78, thump: 95 },
+    color: 0xb02e2e,
+  },
   // Kilic: yakin dovus (melee). Mermi/sarjor yok, sol tik ile savrulur.
   sword: {
     name: 'Kılıç', mag: 1, fireDelay: 480, reloadTime: 0, auto: false,
@@ -66,9 +72,10 @@ let myTeam = null;
 let currentRound = 1;
 let teamScores = { police: 0, bandit: 0 };
 let ffaWins = {}; // kilic modu: id -> round galibiyeti
+let kingWins = {}; // kral modu: id -> kral devirme sayisi
 let myAvatar = localStorage.getItem('cs_avatar') || 'komando';
 if (!AVATARS[myAvatar]) myAvatar = 'komando';
-if (!['duel', 'arena', 'team', 'gungame', 'domination', 'kilic'].includes(gameMode)) gameMode = 'duel';
+if (!['duel', 'arena', 'team', 'gungame', 'domination', 'kilic', 'kral'].includes(gameMode)) gameMode = 'duel';
 if (!['depot', 'lanes', 'fortress', 'yard', 'crossfire'].includes(arenaChoice)) arenaChoice = 'depot';
 
 // Takim tabanli modlar (takim secimi + dost atesi kapali)
@@ -84,6 +91,7 @@ function applyGunGameWeapon() {
 function equipForMode() {
   if (gameMode === 'gungame') applyGunGameWeapon();
   else if (gameMode === 'kilic') switchGun('sword');
+  else if (gameMode === 'kral') switchGun(player.isKing ? 'kingrifle' : 'rifle');
   else switchGun('rifle');
 }
 
@@ -153,6 +161,17 @@ const MODE_INFO = {
       'Skor: kazanılan round sayısı. Yeni round otomatik başlar.',
     ],
     meta: '👥 2-8 oyuncu • Eleme • Silah yok',
+  },
+  kral: {
+    title: 'Kral Kim - 300 Can',
+    goal: 'Bir oyuncu kral olur. Kral 300 canli, daha buyuk ve ozel silahlidir.',
+    how: [
+      'Ilk kral rastgele secilir ve merkezdeki pit bolgesinde baslar.',
+      'Kralin silahi tek isabette normal oyuncunun 100 canini bitirir.',
+      'Normal oyuncular sadece krala hasar verebilir; birbirlerine ates edemez.',
+      'Krali son vurusla olduren oyuncu bir sonraki roundun krali olur.',
+    ],
+    meta: '2-8 oyuncu - Kral avlama - Dost atesi kapali',
   },
 };
 
@@ -487,6 +506,8 @@ const player = {
   crouch: false,
   eyeHeight: STAND_EYE_HEIGHT,
   hp: 100,
+  maxHp: 100,
+  isKing: false,
   alive: true,
   gun: 'rifle',
   ammo: GUNS.rifle.mag,
@@ -713,12 +734,15 @@ function makeGunMesh(type) {
     add(new THREE.CylinderGeometry(0.018, 0.018, 0.5, 8), metal, 0, -0.025, -0.58, Math.PI / 2); // fişek tüpü
     add(new THREE.BoxGeometry(0.075, 0.06, 0.16), body, 0, -0.03, -0.42);                        // pompa
     add(new THREE.BoxGeometry(0.07, 0.11, 0.3), body, 0, -0.03, 0.34);                           // dipçik
-  } else if (type === 'sniper') {
+  } else if (type === 'sniper' || type === 'kingrifle') {
     add(new THREE.CylinderGeometry(0.02, 0.02, 0.85, 8), metal, 0, 0.01, -0.8, Math.PI / 2);     // uzun namlu
     add(new THREE.CylinderGeometry(0.035, 0.035, 0.24, 10), metal, 0, 0.13, -0.02, Math.PI / 2); // dürbün
     add(new THREE.CylinderGeometry(0.046, 0.046, 0.03, 10), metal, 0, 0.13, 0.11, Math.PI / 2);  // dürbün merceği
     add(new THREE.BoxGeometry(0.078, 0.09, 0.34), body, 0, -0.01, -0.33);                        // yeşil gövde
     add(new THREE.BoxGeometry(0.07, 0.12, 0.3), body, 0, -0.03, 0.36);                           // dipçik
+    if (type === 'kingrifle') {
+      add(new THREE.BoxGeometry(0.12, 0.025, 0.18), new THREE.MeshStandardMaterial({ color: 0xffd36d, roughness: 0.35, metalness: 0.75 }), 0, 0.09, -0.36);
+    }
   }
   return grp;
 }
@@ -900,7 +924,7 @@ function createEnemy(info) {
     id: info.id, name: info.name, group, head, body, legs, armL, armR,
     targetPos: new THREE.Vector3(info.pos[0], info.pos[1], info.pos[2]),
     targetYaw: info.yaw || 0,
-    hp: info.hp, kills: info.kills || 0, deaths: info.deaths || 0, alive: info.hp > 0, protUntil: 0, crouch: !!info.crouch, nameTag, team: info.team || null,
+    hp: info.hp, maxHp: info.maxHp || 100, isKing: !!info.isKing, kills: info.kills || 0, deaths: info.deaths || 0, alive: info.hp > 0, protUntil: 0, crouch: !!info.crouch, nameTag, team: info.team || null,
   };
   setEnemyCrouch(enemy, !!info.crouch);
   enemies.set(info.id, enemy);
@@ -922,9 +946,20 @@ function refreshTeamVisibility() {
   }
 }
 
+function canDamageEnemy(enemy) {
+  if (isTeamMode() && enemy.team && enemy.team === myTeam) return false;
+  if (gameMode === 'kral' && !player.isKing && !enemy.isKing) return false;
+  return true;
+}
+
+function updateEnemyScale(enemy) {
+  const base = enemy.isKing ? 1.5 : 1;
+  enemy.group.scale.set(base, (enemy.crouch ? 0.72 : 1) * base, base);
+}
+
 function setEnemyCrouch(enemy, crouch) {
   enemy.crouch = crouch;
-  enemy.group.scale.y = crouch ? 0.72 : 1;
+  updateEnemyScale(enemy);
 }
 
 // Rakibin takimini degistir (isim etiketi rengini de gunceller)
@@ -1282,7 +1317,7 @@ function tryShoot() {
 
   const targets = [...solids];
   for (const e of enemies.values()) {
-    if (isTeamMode() && e.team && e.team === myTeam) continue;
+    if (!canDamageEnemy(e)) continue;
     if (e.alive) targets.push(e.head, e.body, e.legs, e.armL, e.armR);
   }
 
@@ -1355,7 +1390,7 @@ function meleeAttack(type = 'heavy') {
 
   const targets = [...solids]; // duvarlar dahil: kilic duvardan gecmesin
   for (const e of enemies.values()) {
-    if (isTeamMode() && e.team && e.team === myTeam) continue;
+    if (!canDamageEnemy(e)) continue;
     if (e.alive) targets.push(e.head, e.body, e.legs, e.armL, e.armR);
   }
   raycaster.set(origin, dir);
@@ -1472,7 +1507,7 @@ function checkPickups() {
   }
 
   // Sağlık paketleri: üzerinden geçince otomatik
-  if (player.hp < 100) {
+  if (player.hp < (player.maxHp || 100)) {
     for (const [id, p] of healthPacks) {
       if (player.pos.distanceTo(p.pos) < 1.4) {
         socket.emit('pickupHealth', id);
@@ -1485,11 +1520,13 @@ function checkPickups() {
 // ================== HUD ==================
 function updateHpHUD() {
   const hp = Math.max(0, player.hp);
-  $('hpbar').style.width = hp + '%';
-  $('hptext').textContent = hp;
-  $('hpbar').style.background = hp > 60
+  const maxHp = Math.max(1, player.maxHp || 100);
+  const pct = Math.max(0, Math.min(100, (hp / maxHp) * 100));
+  $('hpbar').style.width = pct + '%';
+  $('hptext').textContent = maxHp > 100 ? `${hp}/${maxHp}` : hp;
+  $('hpbar').style.background = pct > 60
     ? 'linear-gradient(90deg,#2ecc71,#27ae60)'
-    : hp > 30
+    : pct > 30
       ? 'linear-gradient(90deg,#f39c12,#e67e22)'
       : 'linear-gradient(90deg,#e74c3c,#c0392b)';
 }
@@ -1530,6 +1567,14 @@ function updateScoreHUD() {
     $('score-en').textContent = leader ? `Sv ${Math.min(leader.kills, n)}/${n}` : '0';
     $('score-me-name').textContent = myName;
     $('score-en-name').textContent = leader ? leader.name : 'Rakip';
+    return;
+  }
+  if (gameMode === 'kral') {
+    const king = player.isKing ? { name: myName } : [...enemies.values()].find((e) => e.isKing);
+    $('score-me').textContent = kingWins[socket.id] || 0;
+    $('score-en').textContent = king ? '300 HP' : '-';
+    $('score-me-name').textContent = `${myName} R${currentRound}`;
+    $('score-en-name').textContent = king ? `Kral: ${king.name}` : 'Kral';
     return;
   }
   $('score-me').textContent = player.kills;
@@ -1632,6 +1677,8 @@ socket.on('start', ({ players, weapons, arena, mode, round, teamScores: scores }
       player.yaw = info.yaw;
       player.pitch = 0;
       player.hp = info.hp;
+      player.maxHp = info.maxHp || 100;
+      player.isKing = !!info.isKing;
       player.alive = info.hp > 0;
       player.kills = info.kills;
       myTeam = info.team || null;
@@ -1644,6 +1691,7 @@ socket.on('start', ({ players, weapons, arena, mode, round, teamScores: scores }
   }
   refreshTeamVisibility(); // myTeam belli oldu -> dusman etiketlerini gizle
   if (gameMode === 'kilic') { ffaWins = {}; for (const info of players) ffaWins[info.id] = info.wins || 0; }
+  if (gameMode === 'kral') { kingWins = {}; for (const info of players) kingWins[info.id] = info.wins || 0; }
   for (const w of weapons) spawnGroundWeapon(w);
   if (gameMode === 'domination') buildDomZones();
 
@@ -1658,6 +1706,7 @@ socket.on('start', ({ players, weapons, arena, mode, round, teamScores: scores }
     : gameMode === 'domination' ? 'Bölgeleri ele geçir! 🚩'
     : gameMode === 'gungame' ? 'Gun Game! Her kill yeni silah 🔫'
     : gameMode === 'kilic' ? 'Kılıç düellosu! Sona kalan kazanır 🗡️'
+    : gameMode === 'kral' ? (player.isKing ? 'Kral sensin! 300 canla dayan.' : 'Krali indir, siradaki kral ol!')
     : gameMode === 'arena' ? 'Arena basladi!' : 'Rakip geldi! Savas basladi!';
   toast(startMsg);
   if (gameMode === 'kilic') {
@@ -1766,7 +1815,7 @@ socket.on('death', ({ victim, killer, headshot, scores }) => {
   }
 });
 
-socket.on('respawn', ({ id, pos, yaw, hp, prot }) => {
+socket.on('respawn', ({ id, pos, yaw, hp, maxHp, isKing, prot }) => {
   if (id === socket.id) {
     const [sx, sz] = safeSpawnPos(pos[0], pos[2]);
     player.pos.set(sx, pos[1], sz);
@@ -1776,8 +1825,10 @@ socket.on('respawn', ({ id, pos, yaw, hp, prot }) => {
     player.crouch = false;
     player.eyeHeight = STAND_EYE_HEIGHT;
     player.hp = hp;
+    player.maxHp = maxHp || 100;
+    player.isKing = !!isKing;
     player.alive = true;
-    if (gameMode === 'gungame') applyGunGameWeapon(); else switchGun(player.gun); // şarjörü doldur
+    if (gameMode === 'gungame') applyGunGameWeapon(); else equipForMode();
     $('death-overlay').style.display = 'none';
     if (!scoreboardPinned) showScoreboard(false);
     updateHpHUD();
@@ -1792,6 +1843,8 @@ socket.on('respawn', ({ id, pos, yaw, hp, prot }) => {
     if (!enemy) return;
     enemy.alive = true;
     enemy.hp = hp;
+    enemy.maxHp = maxHp || 100;
+    enemy.isKing = !!isKing;
     enemy.group.rotation.x = 0;
     enemy.group.position.set(pos[0], pos[1], pos[2]);
     enemy.targetPos.set(pos[0], pos[1], pos[2]);
@@ -1826,8 +1879,16 @@ socket.on('teamChanged', ({ id, team, pos, yaw, hp, prot }) => {
   if ($('scoreboard').style.display === 'block') renderScoreboard();
 });
 
-socket.on('roundEnd', ({ winner, winnerId, winnerName, ffa, wins, teamScores: scores, nextRoundIn }) => {
+socket.on('roundEnd', ({ winner, winnerId, winnerName, ffa, king, wins, teamScores: scores, nextRoundIn }) => {
   showScoreboard(true); // round sonu skor tablosunu goster
+  if (king) {
+    if (wins) kingWins = wins;
+    updateScoreHUD();
+    const won = winnerId === socket.id;
+    centerBanner(won ? 'SIRADAKI KRAL SENSIN' : `${winnerName || 'Bir oyuncu'} KRAL OLDU`, won ? 'gold' : 'red', nextRoundIn || 3500);
+    toast(`${winnerName || 'Bir oyuncu'} krali devirdi. Yeni round basliyor...`, nextRoundIn || 3500);
+    return;
+  }
   if (ffa) {
     // Kilic (FFA): son kalan oyuncu round'u kazanir
     if (wins) ffaWins = wins;
@@ -1890,6 +1951,8 @@ socket.on('roundStart', ({ players, weapons, round, teamScores: scores }) => {
       player.pitch = 0;
       player.vel.set(0, 0, 0);
       player.hp = info.hp;
+      player.maxHp = info.maxHp || 100;
+      player.isKing = !!info.isKing;
       player.alive = info.hp > 0;
       player.crouch = false;
       player.eyeHeight = STAND_EYE_HEIGHT;
@@ -1904,11 +1967,12 @@ socket.on('roundStart', ({ players, weapons, round, teamScores: scores }) => {
     }
   }
   refreshTeamVisibility(); // dusman etiketlerini gizle
+  if (gameMode === 'kral') { kingWins = {}; for (const info of players) kingWins[info.id] = info.wins || 0; }
   for (const w of weapons) spawnGroundWeapon(w);
   updateAmmoHUD();
   updateScoreHUD();
-  centerBanner(`ROUND ${currentRound}`, 'gold', 1000);
-  toast(`Round ${currentRound} basladi!`);
+  centerBanner(gameMode === 'kral' && player.isKing ? `ROUND ${currentRound}: KRAL SENSIN` : `ROUND ${currentRound}`, 'gold', 1000);
+  toast(gameMode === 'kral' ? (player.isKing ? '300 canla hayatta kal.' : 'Krali avla.') : `Round ${currentRound} basladi!`);
 });
 
 socket.on('healthSpawn', ({ id, pos }) => {

@@ -23,11 +23,12 @@ const MODES = {
   gungame: { label: 'Gun Game', maxPlayers: 8 },
   domination: { label: 'Bolge Kapma', maxPlayers: 8 },
   kilic: { label: 'Kilic', maxPlayers: 8 },
+  kral: { label: 'Kral Kim', maxPlayers: 8 },
 };
 // Eleme (round) modlari: olunce round bitene kadar beklenir, son kalan kazanir
 const ELIM_MODES = new Set(['team', 'kilic']);
 // Silahsiz modlar: yerde silah olusturma
-const NO_WEAPON_MODES = new Set(['gungame', 'kilic']);
+const NO_WEAPON_MODES = new Set(['gungame', 'kilic', 'kral']);
 // Takim tabanli modlar (takim secimi, dost atesi kapali, takim dogumlari)
 const TEAM_MODES = new Set(['team', 'domination']);
 const ARENAS = new Set(['depot', 'lanes', 'fortress', 'yard', 'crossfire']);
@@ -64,7 +65,11 @@ const DAMAGE = {
   shotgun: { head: 28,  body: 12 },
   sniper:  { head: 150, body: 85 },
   sword:   { head: 100, body: 55 },
+  kingrifle: { head: 100, body: 100 },
 };
+const KING_HP = 300;
+const KING_SPAWN = { pos: [0, 0, 6], yaw: 0 };
+const KING_FIRE_DELAY_MS = 950;
 const HEALTH_AMOUNT = 40;
 const RESPAWN_MS = 3000;
 const WEAPON_RESPAWN_MS = 25000;
@@ -212,12 +217,16 @@ function endMatch(room, payload) {
 function resetRoundPlayers(room) {
   let i = 0;
   const teamIndex = { police: 0, bandit: 0 };
+  if (room.mode === 'kral') ensureKing(room);
   for (const p of room.players.values()) {
     const teamMode = TEAM_MODES.has(room.mode);
+    const isKing = room.mode === 'kral' && p.id === room.kingId;
     const spawnList = teamMode ? TEAM_SPAWNS[p.team] : SPAWNS;
     const idx = teamMode ? teamIndex[p.team]++ : i;
-    const s = spawnList[idx % spawnList.length];
-    p.hp = 100;
+    const s = isKing ? KING_SPAWN : spawnList[idx % spawnList.length];
+    p.isKing = isKing;
+    p.maxHp = isKing ? KING_HP : 100;
+    p.hp = p.maxHp;
     p.pos = s.pos.slice();
     p.yaw = s.yaw;
     p.crouch = false;
@@ -229,7 +238,7 @@ function resetRoundPlayers(room) {
 function playerInfo(p) {
   return {
     id: p.id, name: p.name, avatar: p.avatar, pos: p.pos, yaw: p.yaw, hp: p.hp, kills: p.kills, deaths: p.deaths,
-    crouch: !!p.crouch, team: p.team || null, wins: p.wins || 0,
+    crouch: !!p.crouch, team: p.team || null, wins: p.wins || 0, isKing: !!p.isKing, maxHp: p.maxHp || 100,
   };
 }
 
@@ -251,12 +260,23 @@ function spawnPlayer(room, p) {
     }
     if (nearest > bestDist) { bestDist = nearest; best = s; }
   }
-  p.hp = 100;
+  p.isKing = room.mode === 'kral' && p.id === room.kingId;
+  p.maxHp = p.isKing ? KING_HP : 100;
+  p.hp = p.maxHp;
   p.pos = best.pos.slice();
   p.yaw = best.yaw;
   p.crouch = false;
   p.protUntil = Date.now() + SPAWN_PROTECT_MS;
   return best;
+}
+
+function ensureKing(room) {
+  if (room.mode !== 'kral') return null;
+  if (room.kingId && room.players.has(room.kingId)) return room.players.get(room.kingId);
+  const list = [...room.players.values()];
+  const king = list[Math.floor(Math.random() * list.length)] || null;
+  room.kingId = king ? king.id : null;
+  return king;
 }
 
 function assignTeam(room) {
@@ -332,6 +352,29 @@ function checkRoundEndFFA(room) {
   room.timers.add(t);
 }
 
+function endKingRound(room, killer, victim) {
+  if (room.mode !== 'kral' || !room.roundActive) return;
+  room.roundActive = false;
+  room.kingId = killer.id;
+  killer.wins = (killer.wins || 0) + 1;
+  const wins = {};
+  for (const p of room.players.values()) wins[p.id] = p.wins || 0;
+  io.to(room.code).emit('roundEnd', {
+    king: true,
+    winnerId: killer.id,
+    winnerName: killer.name,
+    oldKingId: victim.id,
+    oldKingName: victim.name,
+    wins,
+    nextRoundIn: ROUND_RESTART_MS,
+  });
+  const t = setTimeout(() => {
+    room.timers.delete(t);
+    startNextRound(room);
+  }, ROUND_RESTART_MS);
+  room.timers.add(t);
+}
+
 function resolveTeam(room, requestedTeam) {
   if (!TEAM_MODES.has(room.mode)) return null;
   // Oyuncu gecerli bir takim sectiyse ona uy; aksi halde dengeli ata.
@@ -346,6 +389,7 @@ function joinPlayer(room, socket, name, avatar, team) {
     name: (name || 'Oyuncu').slice(0, 16),
     avatar: typeof avatar === 'string' ? avatar.slice(0, 20) : 'komando',
     hp: 100, kills: 0, deaths: 0, wins: 0, protUntil: 0,
+    maxHp: 100, isKing: false,
     pos: [0, 0, 0], yaw: 0, crouch: false,
     team: resolveTeam(room, team),
   });
@@ -377,6 +421,7 @@ io.on('connection', (socket) => {
       round: 1,
       roundActive: false,
       teamScores: { police: 0, bandit: 0 },
+      kingId: null,
     };
     ROOMS.set(code, room);
     const team = data && typeof data === 'object' ? data.team : undefined;
@@ -468,18 +513,30 @@ io.on('connection', (socket) => {
   // Isabet bildirimi - hasari sunucu uygular
   socket.on('hit', (data) => {
     const part = data && data.part;
-    const gun = data && data.gun;
+    let gun = data && data.gun;
     const targetId = data && data.targetId;
     const room = getRoom(socket);
     if (!room || !room.started) return;
     if (ELIM_MODES.has(room.mode) && !room.roundActive) return;
+    if (room.mode === 'kral' && !room.roundActive) return;
     const attacker = room.players.get(socket.id);
     const victim = targetId ? room.players.get(targetId) : null;
     if (!attacker || !victim) return;
     if (victim.id === attacker.id) return;
     if (TEAM_MODES.has(room.mode) && attacker.team && attacker.team === victim.team) return;
+    if (room.mode === 'kral') {
+      const attackerIsKing = attacker.id === room.kingId;
+      const victimIsKing = victim.id === room.kingId;
+      if (!attackerIsKing && !victimIsKing) return; // normaller birbirine hasar veremez
+      gun = attackerIsKing ? 'kingrifle' : 'rifle';
+    }
     if (attacker.hp <= 0 || victim.hp <= 0) return;
     if (victim.protUntil && Date.now() < victim.protUntil) return; // dogum korumasi
+    if (room.mode === 'kral' && attacker.id === room.kingId) {
+      const now = Date.now();
+      if (attacker.lastKingHitAt && now - attacker.lastKingHitAt < KING_FIRE_DELAY_MS) return;
+      attacker.lastKingHitAt = now;
+    }
 
     let dmg;
     if (gun === 'sword') {
@@ -514,6 +571,10 @@ io.on('connection', (socket) => {
         checkRoundEndFFA(room);
         return;
       }
+      if (room.mode === 'kral' && victim.id === room.kingId) {
+        endKingRound(room, attacker, victim);
+        return;
+      }
       // Gun Game: son silahla (sniper) kill yapan maci kazanir
       if (room.mode === 'gungame' && attacker.kills >= GUN_GAME_ORDER.length) {
         endMatch(room, { winner: attacker.id, winnerName: attacker.name, mode: 'gungame', scores: scoreMap(room) });
@@ -524,7 +585,7 @@ io.on('connection', (socket) => {
         if (!ROOMS.has(room.code) || !room.started) return;
         if (!room.players.has(victim.id)) return;
         const best = spawnPlayer(room, victim);
-        io.to(room.code).emit('respawn', { id: victim.id, pos: best.pos, yaw: best.yaw, hp: 100, prot: SPAWN_PROTECT_MS });
+        io.to(room.code).emit('respawn', { id: victim.id, pos: best.pos, yaw: best.yaw, hp: victim.hp, maxHp: victim.maxHp || 100, isKing: !!victim.isKing, prot: SPAWN_PROTECT_MS });
       }, RESPAWN_MS);
       room.timers.add(t);
     }
@@ -535,10 +596,10 @@ io.on('connection', (socket) => {
     const room = getRoom(socket);
     if (!room || !room.started) return;
     const p = room.players.get(socket.id);
-    if (!p || p.hp <= 0 || p.hp >= 100) return;
+    if (!p || p.hp <= 0 || p.hp >= (p.maxHp || 100)) return;
     if (!room.packs.has(id)) return;
     room.packs.delete(id);
-    p.hp = Math.min(100, p.hp + HEALTH_AMOUNT);
+    p.hp = Math.min(p.maxHp || 100, p.hp + HEALTH_AMOUNT);
     io.to(room.code).emit('healthTaken', { id, by: socket.id, hp: p.hp });
   });
 
@@ -577,6 +638,11 @@ io.on('connection', (socket) => {
       io.to(room.code).emit('opponentLeft', { name: p ? p.name : 'Rakip' });
     } else {
       io.to(room.code).emit('playerLeft', { id: socket.id, name: p ? p.name : 'Oyuncu' });
+      if (room.mode === 'kral' && p && p.id === room.kingId) {
+        room.kingId = null;
+        ensureKing(room);
+        if (room.roundActive) startNextRound(room);
+      }
       checkRoundEnd(room);
       checkRoundEndFFA(room);
     }

@@ -148,3 +148,12 @@
 2026-06-11T14:21:33Z ERR Request failed error="Unable to reach the origin service. The service may be down or it may not be responding to traffic from cloudflared: dial tcp 127.0.0.1:3000: connectex: No connection could be made because the target machine actively refused it." connIndex=0 dest=https://nano-kai-lip-potentially.trycloudflare.com/socket.io/?EIO=4&transport=polling&t=l5wg239d event=0 ip=198.41.200.73 type=http
 2026-06-11T14:21:33Z ERR  error="Unable to reach the origin service. The service may be down or it may not be responding to traffic from cloudflared: dial tcp 127.0.0.1:3000: connectex: No connection could be made because the target machine actively refused it." connIndex=0 event=1 ingressRule=0 originService=http://localhost:3000
 2026-06-11T14:21:33Z ERR Request failed error="Unable to reach the origin service. The service may be down or it may not be responding to traffic from cloudflared: dial tcp 127.0.0.1:3000: connectex: No connection could be made because the target machine actively refused it." connIndex=0 dest=https://nano-kai-lip-potentially.trycloudflare.com/socket.io/?EIO=4&transport=polling&t=l5wg114k event=0 ip=198.41.200.73 type=http
+2026-06-11T15:20:40Z INF Initiating graceful shutdown due to signal terminated ...
+2026-06-11T15:20:40Z ERR failed to run the datagram handler error="context canceled" connIndex=0 event=0 ip=198.41.200.73
+2026-06-11T15:20:40Z ERR failed to serve tunnel connection error="accept stream listener encountered a failure while serving" connIndex=0 event=0 ip=198.41.200.73
+2026-06-11T15:20:40Z ERR Serve tunnel error error="accept stream listener encountered a failure while serving" connIndex=0 event=0 ip=198.41.200.73
+2026-06-11T15:20:40Z INF Retrying connection in up to 1s connIndex=0 event=0 ip=198.41.200.73
+2026-06-11T15:20:40Z ERR Connection terminated connIndex=0
+2026-06-11T15:20:40Z ERR no more connections active and exiting
+2026-06-11T15:20:40Z INF Tunnel server stopped
+2026-06-11T15:20:40Z INF Metrics server stopped
