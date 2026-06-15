@@ -24,11 +24,13 @@ const MODES = {
   domination: { label: 'Bolge Kapma', maxPlayers: 8 },
   kilic: { label: 'Kilic', maxPlayers: 8 },
   kral: { label: 'Kral Kim', maxPlayers: 8 },
+  awp: { label: 'AWP 1v1', maxPlayers: 2 },
 };
 // Eleme (round) modlari: olunce round bitene kadar beklenir, son kalan kazanir
 const ELIM_MODES = new Set(['team', 'kilic']);
 // Silahsiz modlar: yerde silah olusturma
-const NO_WEAPON_MODES = new Set(['gungame', 'kilic', 'kral']);
+const NO_WEAPON_MODES = new Set(['gungame', 'kilic', 'kral', 'awp']);
+const NO_HEALTH_MODES = new Set(['awp']);
 // Takim tabanli modlar (takim secimi, dost atesi kapali, takim dogumlari)
 const TEAM_MODES = new Set(['team', 'domination']);
 const ARENAS = new Set(['depot', 'lanes', 'fortress', 'yard', 'crossfire']);
@@ -41,6 +43,11 @@ const SPAWNS = [
   { pos: [10, 0, 22], yaw: Math.PI },
   { pos: [-10, 0, 22], yaw: Math.PI },
   { pos: [10, 0, -22], yaw: 0 },
+];
+
+const AWP_SPAWNS = [
+  { pos: [0, 0, 24], yaw: Math.PI },
+  { pos: [0, 0, -24], yaw: 0 },
 ];
 
 // Saglik paketi cikabilecek noktalar (haritadaki bos alanlar)
@@ -159,7 +166,7 @@ function startGame(room) {
   const weapons = [...room.weapons.values()];
 
   io.to(room.code).emit('start', { players, weapons, arena: room.arena, mode: room.mode, round: room.round, teamScores: room.teamScores });
-  scheduleHealthPack(room);
+  if (!NO_HEALTH_MODES.has(room.mode)) scheduleHealthPack(room);
   if (room.mode === 'domination') startDomination(room);
 }
 
@@ -221,7 +228,7 @@ function resetRoundPlayers(room) {
   for (const p of room.players.values()) {
     const teamMode = TEAM_MODES.has(room.mode);
     const isKing = room.mode === 'kral' && p.id === room.kingId;
-    const spawnList = teamMode ? TEAM_SPAWNS[p.team] : SPAWNS;
+    const spawnList = room.mode === 'awp' ? AWP_SPAWNS : teamMode ? TEAM_SPAWNS[p.team] : SPAWNS;
     const idx = teamMode ? teamIndex[p.team]++ : i;
     const s = isKing ? KING_SPAWN : spawnList[idx % spawnList.length];
     p.isKing = isKing;
@@ -249,6 +256,22 @@ function scoreMap(room) {
 }
 
 function spawnPlayer(room, p) {
+  if (room.mode === 'awp') {
+    let idx = 0;
+    for (const other of room.players.values()) {
+      if (other.id === p.id) break;
+      idx++;
+    }
+    const s = AWP_SPAWNS[idx % AWP_SPAWNS.length];
+    p.isKing = false;
+    p.maxHp = 100;
+    p.hp = 100;
+    p.pos = s.pos.slice();
+    p.yaw = s.yaw;
+    p.crouch = false;
+    p.protUntil = Date.now() + SPAWN_PROTECT_MS;
+    return s;
+  }
   let best = SPAWNS[room.players.size % SPAWNS.length];
   let bestDist = -1;
   for (const s of SPAWNS) {
@@ -595,6 +618,7 @@ io.on('connection', (socket) => {
   socket.on('pickupHealth', (id) => {
     const room = getRoom(socket);
     if (!room || !room.started) return;
+    if (NO_HEALTH_MODES.has(room.mode)) return;
     const p = room.players.get(socket.id);
     if (!p || p.hp <= 0 || p.hp >= (p.maxHp || 100)) return;
     if (!room.packs.has(id)) return;

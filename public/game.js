@@ -75,7 +75,7 @@ let ffaWins = {}; // kilic modu: id -> round galibiyeti
 let kingWins = {}; // kral modu: id -> kral devirme sayisi
 let myAvatar = localStorage.getItem('cs_avatar') || 'komando';
 if (!AVATARS[myAvatar]) myAvatar = 'komando';
-if (!['duel', 'arena', 'team', 'gungame', 'domination', 'kilic', 'kral'].includes(gameMode)) gameMode = 'duel';
+if (!['duel', 'arena', 'team', 'gungame', 'domination', 'kilic', 'kral', 'awp'].includes(gameMode)) gameMode = 'duel';
 if (!['depot', 'lanes', 'fortress', 'yard', 'crossfire'].includes(arenaChoice)) arenaChoice = 'depot';
 
 // Takim tabanli modlar (takim secimi + dost atesi kapali)
@@ -92,6 +92,7 @@ function equipForMode() {
   if (gameMode === 'gungame') applyGunGameWeapon();
   else if (gameMode === 'kilic') switchGun('sword');
   else if (gameMode === 'kral') switchGun(player.isKing ? 'kingrifle' : 'rifle');
+  else if (gameMode === 'awp') switchGun('sniper');
   else switchGun('rifle');
 }
 
@@ -172,6 +173,17 @@ const MODE_INFO = {
       'Krali son vurusla olduren oyuncu bir sonraki roundun krali olur.',
     ],
     meta: '2-8 oyuncu - Kral avlama - Dost atesi kapali',
+  },
+  awp: {
+    title: 'AWP 1v1 - Uzun Hat',
+    goal: 'Iki oyuncu genis ve uzun bir hatta sadece AWP ile duello atar.',
+    how: [
+      'Oda 2 kisiliktir; herkes otomatik AWP ile baslar.',
+      'Yerde silah yoktur, mod sadece niÅŸan ve pozisyon uzerinedir.',
+      'Alan uzun ve genistir; yol gibi gorunmez ama uzun hat mantigi verir.',
+      'Oldugunde 3 saniye sonra kendi tarafinda yeniden dogarsin.',
+    ],
+    meta: '2 oyuncu - Sadece AWP - Uzun/genis hat',
   },
 };
 
@@ -396,22 +408,47 @@ box(0, MAP_SIZE / 2, MAP_SIZE, 1, WALL_H, 0x8a6f4d);
 box(-MAP_SIZE / 2, 0, 1, MAP_SIZE, WALL_H, 0x8a6f4d);
 box(MAP_SIZE / 2, 0, 1, MAP_SIZE, WALL_H, 0x8a6f4d);
 
+
+const baseInteriorMeshes = [];
+const baseInteriorColliders = [];
+
+function baseBox(x, z, w, d, h, color, rotY = 0) {
+  const before = colliders.length;
+  const mesh = box(x, z, w, d, h, color, rotY);
+  baseInteriorMeshes.push(mesh);
+  for (let i = before; i < colliders.length; i++) baseInteriorColliders.push(colliders[i]);
+  return mesh;
+}
+
+function setBaseInteriorEnabled(enabled) {
+  for (const mesh of baseInteriorMeshes) {
+    mesh.visible = enabled;
+    const si = solids.indexOf(mesh);
+    if (enabled && si < 0) solids.push(mesh);
+    else if (!enabled && si >= 0) solids.splice(si, 1);
+  }
+  for (const collider of baseInteriorColliders) {
+    const ci = colliders.indexOf(collider);
+    if (enabled && ci < 0) colliders.push(collider);
+    else if (!enabled && ci >= 0) colliders.splice(ci, 1);
+  }
+}
 // Orta kule + siper düzeni
-box(0, 0, 5, 5, 2.6, 0xb0a285);            // orta blok (üstünde AWP doğar)
-box(8, 0, 2, 2, 1.2, 0xc2873e);            // alçak kasalar (üstüne çıkılabilir)
-box(-8, 0, 2, 2, 1.2, 0xc2873e);
-box(0, 8, 2, 2, 1.2, 0xc2873e);
-box(0, -8, 2, 2, 1.2, 0xc2873e);
-box(14, 7, 6, 1.4, 2.6, 0x7d8a99);         // siper duvarları
-box(-14, -7, 6, 1.4, 2.6, 0x7d8a99);
-box(7, -14, 1.4, 6, 2.6, 0x7d8a99);
-box(-7, 14, 1.4, 6, 2.6, 0x7d8a99);
-box(20, -18, 3, 3, 2.2, 0xc2873e);         // köşe kasaları
-box(-20, 18, 3, 3, 2.2, 0xc2873e);
-box(18, 18, 2.5, 2.5, 1.2, 0xa56f31);
-box(-18, -18, 2.5, 2.5, 1.2, 0xa56f31);
-box(24, 6, 1.4, 8, 2.8, 0x7d8a99);
-box(-24, -6, 1.4, 8, 2.8, 0x7d8a99);
+baseBox(0, 0, 5, 5, 2.6, 0xb0a285);            // orta blok (üstünde AWP doğar)
+baseBox(8, 0, 2, 2, 1.2, 0xc2873e);            // alçak kasalar (üstüne çıkılabilir)
+baseBox(-8, 0, 2, 2, 1.2, 0xc2873e);
+baseBox(0, 8, 2, 2, 1.2, 0xc2873e);
+baseBox(0, -8, 2, 2, 1.2, 0xc2873e);
+baseBox(14, 7, 6, 1.4, 2.6, 0x7d8a99);         // siper duvarları
+baseBox(-14, -7, 6, 1.4, 2.6, 0x7d8a99);
+baseBox(7, -14, 1.4, 6, 2.6, 0x7d8a99);
+baseBox(-7, 14, 1.4, 6, 2.6, 0x7d8a99);
+baseBox(20, -18, 3, 3, 2.2, 0xc2873e);         // köşe kasaları
+baseBox(-20, 18, 3, 3, 2.2, 0xc2873e);
+baseBox(18, 18, 2.5, 2.5, 1.2, 0xa56f31);
+baseBox(-18, -18, 2.5, 2.5, 1.2, 0xa56f31);
+baseBox(24, 6, 1.4, 8, 2.8, 0x7d8a99);
+baseBox(-24, -6, 1.4, 8, 2.8, 0x7d8a99);
 
 const arenaLayoutMeshes = [];
 const arenaLayoutColliders = [];
@@ -444,9 +481,22 @@ function sniperNest(x, z, sx, sz) {
 }
 
 function applyArenaLayout(arena = 'depot') {
-  applyArenaTheme(arena);
+  applyArenaTheme(gameMode === 'awp' ? 'lanes' : arena);
   clearArenaLayout();
-  if (arena === 'lanes') {
+  setBaseInteriorEnabled(gameMode !== 'awp');
+  if (gameMode === 'awp') {
+    arenaBox(-16, 0, 1.2, 46, 2.2, 0x6f7f91);
+    arenaBox(16, 0, 1.2, 46, 2.2, 0x6f7f91);
+    arenaBox(-8, 0, 2.2, 8, 1.35, 0x8b929c);
+    arenaBox(8, 0, 2.2, 8, 1.35, 0x8b929c);
+    arenaBox(0, 0, 5.5, 1.4, 1.15, 0xb67c39);
+    arenaBox(-5, -15, 5, 1.2, 1.35, 0x4c5664);
+    arenaBox(5, 15, 5, 1.2, 1.35, 0x4c5664);
+    arenaBox(-7, 24, 8, 1.2, 1.55, 0x26345f);
+    arenaBox(7, -24, 8, 1.2, 1.55, 0x26345f);
+    arenaBox(-12, 22, 1.2, 5, 1.6, 0x26345f);
+    arenaBox(12, -22, 1.2, 5, 1.6, 0x26345f);
+  } else if (arena === 'lanes') {
     arenaBox(0, -18, 18, 1.2, 2.4, 0xb67c39);
     arenaBox(0, 18, 18, 1.2, 2.4, 0xb67c39);
     arenaBox(-18, 0, 1.2, 18, 2.4, 0xb67c39);
@@ -1692,7 +1742,7 @@ socket.on('start', ({ players, weapons, arena, mode, round, teamScores: scores }
   refreshTeamVisibility(); // myTeam belli oldu -> dusman etiketlerini gizle
   if (gameMode === 'kilic') { ffaWins = {}; for (const info of players) ffaWins[info.id] = info.wins || 0; }
   if (gameMode === 'kral') { kingWins = {}; for (const info of players) kingWins[info.id] = info.wins || 0; }
-  for (const w of weapons) spawnGroundWeapon(w);
+  if (gameMode !== 'awp') for (const w of weapons) spawnGroundWeapon(w);
   if (gameMode === 'domination') buildDomZones();
 
   $('waiting').style.display = 'none';
@@ -1707,6 +1757,7 @@ socket.on('start', ({ players, weapons, arena, mode, round, teamScores: scores }
     : gameMode === 'gungame' ? 'Gun Game! Her kill yeni silah 🔫'
     : gameMode === 'kilic' ? 'Kılıç düellosu! Sona kalan kazanır 🗡️'
     : gameMode === 'kral' ? (player.isKing ? 'Kral sensin! 300 canla dayan.' : 'Krali indir, siradaki kral ol!')
+    : gameMode === 'awp' ? 'AWP 1v1 basladi. Uzun hatti tut!'
     : gameMode === 'arena' ? 'Arena basladi!' : 'Rakip geldi! Savas basladi!';
   toast(startMsg);
   if (gameMode === 'kilic') {
@@ -1968,7 +2019,7 @@ socket.on('roundStart', ({ players, weapons, round, teamScores: scores }) => {
   }
   refreshTeamVisibility(); // dusman etiketlerini gizle
   if (gameMode === 'kral') { kingWins = {}; for (const info of players) kingWins[info.id] = info.wins || 0; }
-  for (const w of weapons) spawnGroundWeapon(w);
+  if (gameMode !== 'awp') for (const w of weapons) spawnGroundWeapon(w);
   updateAmmoHUD();
   updateScoreHUD();
   centerBanner(gameMode === 'kral' && player.isKing ? `ROUND ${currentRound}: KRAL SENSIN` : `ROUND ${currentRound}`, 'gold', 1000);
