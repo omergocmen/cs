@@ -155,6 +155,17 @@
   }
   #score .me { color: #6db3ff; } #score .en { color: #ff6b6b; }
 
+  #futbol-score {
+    display: none; position: absolute; top: 14px; left: 50%; transform: translateX(-50%);
+    background: rgba(0,0,0,0.62); padding: 8px 26px; border-radius: 10px;
+    border: 2px solid rgba(255,255,255,0.22);
+    font-size: 34px; font-weight: 800; letter-spacing: 1px; text-shadow: 0 2px 4px #000;
+    color: #fff; align-items: center; gap: 14px;
+  }
+  #futbol-score .fs-pol { color: #7bb7ff; }
+  #futbol-score .fs-ban { color: #ff7b7b; }
+  #futbol-score .fs-sep { color: #ffd36d; margin: 0 6px; }
+
   #roomtag { position: absolute; top: 16px; right: 16px; background: rgba(0,0,0,0.45); padding: 6px 12px; border-radius: 6px; font-size: 13px; color: #8b97ad; }
   #roomtag b { color: #ffb13d; letter-spacing: 2px; }
   #netstats { position: absolute; top: 16px; left: 16px; background: rgba(0,0,0,0.45); padding: 6px 12px; border-radius: 6px; font-size: 13px; color: #b8c4d8; font-weight: 700; }
@@ -294,6 +305,7 @@
       <div class="mode-card" data-mode="kilic"><strong>Kılıç</strong><span>Silah yok, sona kalan kazanir 🗡️</span></div>
       <div class="mode-card" data-mode="kral"><strong>Kral Kim</strong><span>300 canli krali devir</span></div>
       <div class="mode-card" data-mode="awp"><strong>AWP 1v1</strong><span>Genis uzun hat, sadece AWP</span></div>
+      <div class="mode-card" data-mode="futbol"><strong>Futbol ⚽</strong><span>Topu sür, SPACE ile şut çek</span></div>
     </div>
     <div id="mode-info"></div>
     <div class="section-label">ARENA</div>
@@ -303,6 +315,7 @@
       <div class="mode-card" data-arena="fortress"><strong>Kale</strong><span>Merkez savunma</span></div>
       <div class="mode-card" data-arena="yard"><strong>Avlu</strong><span>Acik catisma</span></div>
       <div class="mode-card" data-arena="crossfire"><strong>Capraz</strong><span>Capraz siper</span></div>
+      <div class="mode-card" data-arena="futbol"><strong>Saha ⚽</strong><span>Futbol sahası</span></div>
     </div>
     <button class="btn-create" id="btn-create">ODA KUR</button>
     <div class="divider">veya arkadaşının odasına katıl</div>
@@ -353,6 +366,7 @@
   <div id="crosshair"></div>
   <div id="hitmarker"><span></span><span></span><span></span><span></span></div>
   <div id="score"><span class="me" id="score-me-name">Sen</span> <span id="score-me">0</span> &nbsp;—&nbsp; <span id="score-en">0</span> <span class="en" id="score-en-name">Rakip</span></div>
+  <div id="futbol-score"><span class="fs-pol">🚔 <b id="fs-pol">0</b></span><span class="fs-sep">:</span><span class="fs-ban"><b id="fs-ban">0</b> 🦹</span></div>
   <div id="netstats">FPS <span id="fps-val">--</span> &nbsp; PING <span id="ping-val">--</span>ms</div>
   <div id="roomtag">ODA <b id="roomtag-code"></b></div>
   <div id="killfeed"></div>

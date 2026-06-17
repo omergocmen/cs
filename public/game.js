@@ -75,8 +75,10 @@ let ffaWins = {}; // kilic modu: id -> round galibiyeti
 let kingWins = {}; // kral modu: id -> kral devirme sayisi
 let myAvatar = localStorage.getItem('cs_avatar') || 'komando';
 if (!AVATARS[myAvatar]) myAvatar = 'komando';
-if (!['duel', 'arena', 'team', 'gungame', 'domination', 'kilic', 'kral', 'awp'].includes(gameMode)) gameMode = 'duel';
-if (!['depot', 'lanes', 'fortress', 'yard', 'crossfire'].includes(arenaChoice)) arenaChoice = 'depot';
+if (!['duel', 'arena', 'team', 'gungame', 'domination', 'kilic', 'kral', 'awp', 'futbol'].includes(gameMode)) gameMode = 'duel';
+if (!['depot', 'lanes', 'fortress', 'yard', 'crossfire', 'futbol'].includes(arenaChoice)) arenaChoice = 'depot';
+let footyScore = { police: 0, bandit: 0 };
+let pendingFutbolKickoff = false; // maça ilk girişte "MAÇ BAŞLADI" anonsu için
 
 // Takim tabanli modlar (takim secimi + dost atesi kapali)
 const isTeamMode = () => gameMode === 'team' || gameMode === 'domination';
@@ -93,7 +95,9 @@ function equipForMode() {
   else if (gameMode === 'kilic') switchGun('sword');
   else if (gameMode === 'kral') switchGun(player.isKing ? 'kingrifle' : 'rifle');
   else if (gameMode === 'awp') switchGun('sniper');
+  else if (gameMode === 'futbol') switchGun('rifle'); // silah görünmez (setFutbolMode ile gizlenir)
   else switchGun('rifle');
+  setFutbolMode(gameMode === 'futbol');
 }
 
 // ---- Mod aciklamalari (baslangic ekraninda "nasil oynanir") ----
@@ -185,6 +189,18 @@ const MODE_INFO = {
     ],
     meta: '2 oyuncu - Sadece AWP - Uzun/genis hat',
   },
+  futbol: {
+    title: '⚽ Futbol — Saha Maçı',
+    goal: 'Topu sürerek rakip kaleye götür. İlk 5 golü atan takım kazanır.',
+    how: [
+      'Topa yaklaşınca top önünde sürülür (WASD ile yürü, bakış yönüne sürer).',
+      'SPACE ile sürdüğün topa sert vurup şut çekersin (uzağa hızlı gider).',
+      'Q ile savunma yaparsın: rakibin topuna uzanıp kontrolünden çıkarırsın (tackle).',
+      'İki takım: 🚔 Polis ve 🦹 Haydut. Otomatik takım atanır.',
+      'Silah ve can yok; sadece top kontrolü, savunma ve gol.',
+    ],
+    meta: '2-8 oyuncu • İki takım • İlk 5 gol kazanır',
+  },
 };
 
 function renderModeInfo() {
@@ -204,6 +220,12 @@ document.querySelectorAll('[data-mode]').forEach((card) => {
     gameMode = card.dataset.mode;
     localStorage.setItem('cs_mode', gameMode);
     document.querySelectorAll('[data-mode]').forEach((c) => c.classList.toggle('sel', c === card));
+    // Futbol modunda saha arenasını otomatik seç
+    if (gameMode === 'futbol') {
+      arenaChoice = 'futbol';
+      localStorage.setItem('cs_arena', arenaChoice);
+      document.querySelectorAll('[data-arena]').forEach((c) => c.classList.toggle('sel', c.dataset.arena === 'futbol'));
+    }
     renderModeInfo();
   };
 });
@@ -299,7 +321,33 @@ const ARENA_THEMES = {
   fortress: { sky: 0x9da8b8, fog: 0x9da8b8, floor: '#69717d', line: 'rgba(255,255,255,0.10)', name: 'fortress' },
   yard: { sky: 0x8fcf98, fog: 0x8fcf98, floor: '#4f7c47', line: 'rgba(20,55,20,0.25)', name: 'yard' },
   crossfire: { sky: 0x201d3a, fog: 0x201d3a, floor: '#25263f', line: 'rgba(90,220,255,0.22)', name: 'neon' },
+  futbol: { sky: 0x8fcf98, fog: 0x8fcf98, floor: '#2e7d32', line: 'rgba(255,255,255,0.92)', name: 'pitch' },
 };
+
+// Futbol sahası zemin dokusu: çim + orta çizgi + orta daire + ceza sahaları
+function makePitchTexture() {
+  const c = document.createElement('canvas');
+  c.width = c.height = 512;
+  const ctx = c.getContext('2d');
+  // Çim şeritleri
+  for (let i = 0; i < 8; i++) {
+    ctx.fillStyle = i % 2 === 0 ? '#2e7d32' : '#338a37';
+    ctx.fillRect(0, i * 64, 512, 64);
+  }
+  ctx.strokeStyle = 'rgba(255,255,255,0.92)';
+  ctx.lineWidth = 4;
+  // Dış saha çizgisi
+  ctx.strokeRect(24, 24, 464, 464);
+  // Orta çizgi (yatay - Z ekseni boyunca kaleler ±Z'de)
+  ctx.beginPath(); ctx.moveTo(24, 256); ctx.lineTo(488, 256); ctx.stroke();
+  // Orta daire
+  ctx.beginPath(); ctx.arc(256, 256, 60, 0, Math.PI * 2); ctx.stroke();
+  ctx.beginPath(); ctx.arc(256, 256, 5, 0, Math.PI * 2); ctx.fillStyle = 'rgba(255,255,255,0.92)'; ctx.fill();
+  // Ceza sahaları (üst ve alt)
+  ctx.strokeRect(160, 24, 192, 70);
+  ctx.strokeRect(160, 418, 192, 70);
+  return new THREE.CanvasTexture(c);
+}
 
 function makeFloorTexture(theme) {
   const c = document.createElement('canvas');
@@ -333,9 +381,16 @@ function applyArenaTheme(arena = 'depot') {
   scene.fog = new THREE.Fog(theme.fog, arena === 'crossfire' ? 38 : 50, arena === 'crossfire' ? 95 : 120);
   if (floorMesh) {
     const oldMap = floorMesh.material.map;
-    const tex = makeFloorTexture(theme);
-    tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
-    tex.repeat.set(arena === 'crossfire' ? 18 : 15, arena === 'crossfire' ? 18 : 15);
+    let tex;
+    if (arena === 'futbol') {
+      // Saha çizgileri tek karoda; tekrar yok (sahanın tamamını kaplar)
+      tex = makePitchTexture();
+      tex.repeat.set(1, 1);
+    } else {
+      tex = makeFloorTexture(theme);
+      tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+      tex.repeat.set(arena === 'crossfire' ? 18 : 15, arena === 'crossfire' ? 18 : 15);
+    }
     floorMesh.material.map = tex;
     floorMesh.material.needsUpdate = true;
     if (oldMap) oldMap.dispose();
@@ -482,10 +537,22 @@ function sniperNest(x, z, sx, sz) {
 }
 
 function applyArenaLayout(arena = 'depot') {
-  applyArenaTheme(gameMode === 'awp' ? 'lanes' : gameMode === 'kral' ? 'fortress' : arena);
+  applyArenaTheme(gameMode === 'awp' ? 'lanes' : gameMode === 'kral' ? 'fortress' : gameMode === 'futbol' ? 'futbol' : arena);
   clearArenaLayout();
-  setBaseInteriorEnabled(gameMode !== 'awp' && gameMode !== 'kral');
-  if (gameMode === 'awp') {
+  setBaseInteriorEnabled(gameMode !== 'awp' && gameMode !== 'kral' && gameMode !== 'futbol');
+  if (gameMode === 'futbol') {
+    // Saha: kaleler ±Z uçlarında (gol ağzı |x|<4). Ön direkler beyaz, arka ağ açık gri.
+    const makeGoal = (sign) => {
+      const z = 26 * sign;
+      arenaBox(0, z + 1.6 * sign, 8.4, 0.3, 2.2, 0xeeeeee);   // arka ağ
+      arenaBox(-4, z + 0.8 * sign, 0.3, 1.6, 2.2, 0xeeeeee);  // sol yan ağ
+      arenaBox(4, z + 0.8 * sign, 0.3, 1.6, 2.2, 0xeeeeee);   // sağ yan ağ
+      arenaBox(-4, z, 0.4, 0.4, 2.6, 0xffffff);               // sol direk
+      arenaBox(4, z, 0.4, 0.4, 2.6, 0xffffff);                // sağ direk
+    };
+    makeGoal(1);
+    makeGoal(-1);
+  } else if (gameMode === 'awp') {
     arenaBox(-16, 0, 1.2, 46, 2.2, 0x6f7f91);
     arenaBox(16, 0, 1.2, 46, 2.2, 0x6f7f91);
     arenaBox(-8, 0, 2.2, 8, 1.35, 0x8b929c);
@@ -601,7 +668,7 @@ const player = {
 const keys = {};
 const GAME_KEYS = new Set([
   'KeyW', 'KeyA', 'KeyS', 'KeyD', 'Space', 'ShiftLeft', 'ShiftRight',
-  'KeyC', 'KeyR', 'KeyE',
+  'KeyC', 'KeyR', 'KeyE', 'KeyQ',
 ]);
 
 addEventListener('keydown', (e) => {
@@ -619,6 +686,7 @@ addEventListener('keydown', (e) => {
   keys[e.code] = true;
   if (e.code === 'KeyR') tryReload();
   if (e.code === 'KeyE') tryPickupWeapon();
+  if (e.code === 'KeyQ') tryTackle();
 });
 addEventListener('keyup', (e) => {
   if (gameRunning && GAME_KEYS.has(e.code)) e.preventDefault();
@@ -636,6 +704,7 @@ let mouseDown = false;
 document.addEventListener('mousedown', (e) => {
   if (!gameRunning || document.pointerLockElement !== document.body) return;
   e.preventDefault();
+  if (gameMode === 'futbol') return; // futbolda fare aksiyonu yok (sadece bakış)
   if (e.button === 0) { mouseDown = true; tryShoot(); }
   if (e.button === 2) {
     // Kilic: sag tik = hafif vurus; diger silahlar: zoom
@@ -692,7 +761,15 @@ document.addEventListener('pointerlockchange', () => {
   if (gameRunning && document.pointerLockElement !== document.body) {
     if (selectingTeam) return; // takim secim ekrani aciksa devam ekranini gosterme
     showResume();
-  } else hideResume();
+  } else {
+    hideResume();
+    // Futbol: maça ilk girişte kickoff anonsu
+    if (pendingFutbolKickoff && document.pointerLockElement === document.body) {
+      pendingFutbolKickoff = false;
+      centerBanner('⚽ MAÇ BAŞLADI!', 'gold', 2600);
+      setTimeout(() => toast('SPACE: şut  •  Q: top çal (savunma)  •  İlk 5 gol kazanır ⚽', 4000), 700);
+    }
+  }
 });
 $('btn-resume').onclick = () => document.body.requestPointerLock();
 
@@ -758,6 +835,71 @@ function toggleZoom(on) {
 const gunGroup = new THREE.Group();
 camera.add(gunGroup);
 scene.add(camera);
+
+// ================== FUTBOL TOPU ==================
+const FUTBOL_BALL_RADIUS = 0.35;
+function makeBallTexture() {
+  const c = document.createElement('canvas');
+  c.width = c.height = 256;
+  const ctx = c.getContext('2d');
+  ctx.fillStyle = '#fbfbfb';
+  ctx.fillRect(0, 0, 256, 256);
+  // Klasik futbol topu: büyük siyah beşgenler (incecik kenarlıklı)
+  const pent = (x, y, r, rot = 0) => {
+    ctx.beginPath();
+    for (let i = 0; i < 5; i++) {
+      const a = (i / 5) * Math.PI * 2 - Math.PI / 2 + rot;
+      const px = x + Math.cos(a) * r, py = y + Math.sin(a) * r;
+      if (i === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
+    }
+    ctx.closePath();
+    ctx.fillStyle = '#161616'; ctx.fill();
+    ctx.lineWidth = 4; ctx.strokeStyle = '#000'; ctx.stroke();
+  };
+  // merkez beşgen + çevresinde halka + kenarlardaki yarımlar (sarmal kaplama)
+  pent(128, 128, 40);
+  const ring = 78, rr = 30;
+  for (let i = 0; i < 5; i++) {
+    const a = (i / 5) * Math.PI * 2 - Math.PI / 2;
+    pent(128 + Math.cos(a) * ring, 128 + Math.sin(a) * ring, rr, Math.PI);
+  }
+  // üst/alt kenar (kutup) lekeleri
+  pent(128, 8, 26); pent(128, 248, 26);
+  pent(8, 70, 22); pent(248, 70, 22);
+  pent(8, 190, 22); pent(248, 190, 22);
+  return new THREE.CanvasTexture(c);
+}
+const ball = {
+  mesh: new THREE.Mesh(
+    new THREE.SphereGeometry(FUTBOL_BALL_RADIUS, 20, 16),
+    new THREE.MeshStandardMaterial({ map: makeBallTexture(), roughness: 0.6 })
+  ),
+  target: new THREE.Vector3(0, FUTBOL_BALL_RADIUS, 0),
+};
+ball.mesh.castShadow = true;
+ball.mesh.visible = false;
+ball.mesh.position.set(0, FUTBOL_BALL_RADIUS, 0);
+scene.add(ball.mesh);
+let lastKickAt = 0; // yerel şut cooldown (ms)
+let lastTackleAt = 0; // yerel tackle cooldown (ms)
+// Futbol istemci-tahmin sabitleri (sunucudaki sürme değerleriyle aynı olmalı) — gecikmesiz sürme için
+const FB_DRIBBLE_DIST = 2.0, FB_LEAD_PER_SPD = 0.19, FB_LEAD_MAX = 1.4, FB_CONTROL_R = 4.0;
+const ballPredict = new THREE.Vector3();
+
+function tryTackle() {
+  if (gameMode !== 'futbol' || !gameRunning || !player.alive) return;
+  if (document.pointerLockElement !== document.body) return;
+  const now = performance.now();
+  if (now - lastTackleAt < 480) return;
+  lastTackleAt = now;
+  socket.emit('tackle', { y: +player.yaw.toFixed(3) });
+  playBlip(190, 0.08, 0.22); // hamle sesi
+}
+
+function setFutbolMode(on) {
+  ball.mesh.visible = on;
+  gunGroup.visible = !on; // futbolda silah görünmez
+}
 let gunRecoil = 0;
 let screenShake = 0;
 let swordSwing = 0; // kilic savurma animasyonu (1 -> 0)
@@ -1366,6 +1508,7 @@ function ejectShell() {
 }
 
 function tryShoot() {
+  if (gameMode === 'futbol') return; // futbolda silah yok
   if (!gameRunning || !player.alive || player.reloading) return;
   const g = GUNS[player.gun];
   if (g.melee) { meleeAttack('heavy'); return; } // sol tik = agir vurus (kendi beklemesi var)
@@ -1521,6 +1664,7 @@ function showHitmarker(head) {
 }
 
 function tryReload() {
+  if (gameMode === 'futbol') return;
   if (!gameRunning || !player.alive || player.reloading) return;
   const g = GUNS[player.gun];
   if (player.ammo >= g.mag) return;
@@ -1620,6 +1764,20 @@ function updateAmmoHUD() {
   $('ammo').innerHTML = `${player.ammo} <small>/ ${GUNS[player.gun].mag}</small>`;
 }
 function updateScoreHUD() {
+  // Futbol skor tabelası (büyük, ortada) — diğer modlarda gizli
+  const fs = $('futbol-score');
+  if (fs) {
+    if (gameMode === 'futbol') {
+      fs.style.display = 'flex';
+      $('score').style.display = 'none';
+      $('fs-pol').textContent = footyScore.police || 0;
+      $('fs-ban').textContent = footyScore.bandit || 0;
+      return;
+    } else {
+      fs.style.display = 'none';
+      $('score').style.display = '';
+    }
+  }
   if (gameMode === 'team') {
     $('score-me').textContent = teamScores.police || 0;
     $('score-en').textContent = teamScores.bandit || 0;
@@ -1796,10 +1954,13 @@ function updateTeamSpectateCamera() {
 }
 
 // ================== SOKET OLAYLARI ==================
-socket.on('start', ({ players, weapons, arena, mode, round, teamScores: scores, kingProtectMs }) => {
+socket.on('start', ({ players, weapons, arena, mode, round, teamScores: scores, kingProtectMs, footyScore: fScore }) => {
   gameMode = mode || gameMode;
   currentRound = round || currentRound;
   teamScores = scores || teamScores;
+  footyScore = fScore || { police: 0, bandit: 0 };
+  ball.target.set(0, FUTBOL_BALL_RADIUS, 0);
+  ball.mesh.position.set(0, FUTBOL_BALL_RADIUS, 0);
   arenaChoice = arena || arenaChoice;
   applyArenaLayout(arenaChoice);
   removeAllEnemies();
@@ -1849,6 +2010,7 @@ socket.on('start', ({ players, weapons, arena, mode, round, teamScores: scores, 
     : gameMode === 'kilic' ? 'Kılıç düellosu! Sona kalan kazanır 🗡️'
     : gameMode === 'kral' ? (player.isKing ? 'Kral sensin! 300 canla dayan.' : 'Krali indir, siradaki kral ol!')
     : gameMode === 'awp' ? 'AWP 1v1 basladi. Uzun hatti tut!'
+    : gameMode === 'futbol' ? 'Futbol! Topu sür, SPACE ile şut çek ⚽'
     : gameMode === 'arena' ? 'Arena basladi!' : 'Rakip geldi! Savas basladi!';
   toast(startMsg);
   if (gameMode === 'kral' && player.isKing && kingProtectMs) {
@@ -1872,6 +2034,11 @@ socket.on('start', ({ players, weapons, arena, mode, round, teamScores: scores, 
   // Polis/Haydut takim secim ekrani YALNIZCA takim modunda gosterilir.
   if (gameMode === 'team' && !teamChosen) {
     showTeamSelect();
+  } else if (gameMode === 'futbol') {
+    pendingFutbolKickoff = true;
+    const help = $('help');
+    if (help) help.innerHTML = 'WASD: hareket &nbsp;•&nbsp; FARE: yön &nbsp;•&nbsp; SPACE: şut &nbsp;•&nbsp; Q: top çal (savunma) &nbsp;•&nbsp; TAB: skor &nbsp;•&nbsp; ESC: duraklat';
+    showResume('⚽ FUTBOL MAÇI', `${myTeam === 'bandit' ? '🦹 Haydut' : '🚔 Polis'} takımındasın — maça girmek için tıkla`);
   } else {
     showResume('SAVAS BASLADI', 'Oyuna girmek icin tikla');
   }
@@ -1883,6 +2050,35 @@ socket.on('enemyMove', (d) => {
   enemy.targetPos.set(d.p[0], d.p[1], d.p[2]);
   enemy.targetYaw = d.y;
   setEnemyCrouch(enemy, !!d.c);
+});
+
+// ---- Futbol: top durumu, şut efekti, gol ----
+socket.on('ballState', ({ p }) => {
+  if (!p) return;
+  ball.target.set(p[0], p[1], p[2]);
+});
+
+socket.on('kickFx', ({ pos }) => {
+  if (!pos) return;
+  const here = new THREE.Vector3(pos[0], pos[1], pos[2]);
+  const dist = player.pos.distanceTo(here);
+  playBlip(320, 0.1, Math.max(0.05, 0.5 * (1 - dist / 40)));
+});
+
+socket.on('tackleFx', ({ pos, reached }) => {
+  if (!pos) return;
+  const here = new THREE.Vector3(pos[0], 0.3, pos[2]);
+  const dist = player.pos.distanceTo(here);
+  playBlip(reached ? 280 : 150, 0.09, Math.max(0.05, 0.4 * (1 - dist / 40)));
+  if (reached) spawnParticles(here, 0xdfeee0, 8, 3, 8, 0.4, 0.06); // küçük çim/toz
+});
+
+socket.on('goal', ({ team, score }) => {
+  footyScore = score || footyScore;
+  const mine = myTeam && team === myTeam;
+  centerBanner(mine ? 'GOOOL! ⚽' : 'Gol yedin…', mine ? 'gold' : '', 1800);
+  toast(`${score.police} - ${score.bandit} (Polis - Haydut)`);
+  updateScoreHUD();
 });
 
 socket.on('enemyShoot', ({ from, to, tos, gun, melee }) => {
@@ -2254,6 +2450,7 @@ function animate() {
       player.crouch = !!(keys['ShiftLeft'] || keys['ShiftRight'] || keys['KeyC']);
       const speed = player.crouch ? CROUCH_SPEED : MOVE_SPEED;
       if (move.lengthSq() > 0) move.normalize().multiplyScalar(speed);
+      player.planarSpeed = move.length(); // futbol top tahmini için (lokal hız)
 
       player.pos.x += move.x * dt;
       player.pos.z += move.z * dt;
@@ -2270,13 +2467,19 @@ function animate() {
       } else {
         player.onGround = player.pos.y - ground < 0.05;
       }
-      if (keys['Space'] && player.onGround && !player.crouch) {
+      if (gameMode === 'futbol') {
+        // Space = topa şut çek (zıplama yok)
+        if (keys['Space'] && now - lastKickAt > 250) {
+          lastKickAt = now;
+          socket.emit('kick', { y: +player.yaw.toFixed(3) });
+        }
+      } else if (keys['Space'] && player.onGround && !player.crouch) {
         player.vel.y = JUMP_VEL;
         player.onGround = false;
       }
 
-      // Otomatik ateş
-      if (mouseDown && GUNS[player.gun].auto) tryShoot();
+      // Otomatik ateş (futbolda silah yok)
+      if (gameMode !== 'futbol' && mouseDown && GUNS[player.gun].auto) tryShoot();
     }
 
     // Şarjör bitti mi
@@ -2340,6 +2543,31 @@ function animate() {
     }
     flash.intensity = Math.max(0, flash.intensity - dt * 30);
     flashSprite.material.opacity = Math.max(0, flashSprite.material.opacity - dt * 20);
+
+    // Futbol topu: lokal oyuncu topu sürerken İSTEMCİ TAHMİNİ (ağ gecikmesi olmadan önümde
+    // dururum), aksi halde sunucudan gelen pozisyona lerp. Bu, "sürerken topu göremiyorum"
+    // sorununu çözer (sunucu pozisyonu hareket halinde geride kalıyordu).
+    if (gameMode === 'futbol' && ball.mesh.visible) {
+      const px = ball.mesh.position.x, pz = ball.mesh.position.z;
+      const dToBall = Math.hypot(player.pos.x - ball.target.x, player.pos.z - ball.target.z);
+      const justActed = (now - lastKickAt < 320) || (now - lastTackleAt < 320);
+      const owning = player.alive && !justActed && dToBall < FB_CONTROL_R;
+      let aim, rate;
+      if (owning) {
+        const spd = player.planarSpeed || 0;
+        const lead = FB_DRIBBLE_DIST + Math.min(FB_LEAD_MAX, FB_LEAD_PER_SPD * spd);
+        const dirx = -Math.sin(player.yaw), dirz = -Math.cos(player.yaw);
+        ballPredict.set(player.pos.x + dirx * lead, FUTBOL_BALL_RADIUS, player.pos.z + dirz * lead);
+        aim = ballPredict; rate = 20; // tahmine hızlı yapış (gecikmesiz his)
+      } else {
+        aim = ball.target; rate = 16;
+      }
+      ball.mesh.position.lerp(aim, Math.min(1, dt * rate));
+      const ddx = ball.mesh.position.x - px, ddz = ball.mesh.position.z - pz;
+      // hareket yönüne dik eksende yuvarla (mesafe / yarıçap = açı)
+      ball.mesh.rotation.x += ddz / FUTBOL_BALL_RADIUS;
+      ball.mesh.rotation.z -= ddx / FUTBOL_BALL_RADIUS;
+    }
 
     // Rakip yumuşatma
     for (const enemy of enemies.values()) {

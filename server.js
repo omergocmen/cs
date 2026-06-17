@@ -25,15 +25,62 @@ const MODES = {
   kilic: { label: 'Kilic', maxPlayers: 8 },
   kral: { label: 'Kral Kim', maxPlayers: 8 },
   awp: { label: 'AWP 1v1', maxPlayers: 2 },
+  futbol: { label: 'Futbol', maxPlayers: 8 },
 };
 // Eleme (round) modlari: olunce round bitene kadar beklenir, son kalan kazanir
 const ELIM_MODES = new Set(['team', 'kilic']);
 // Silahsiz modlar: yerde silah olusturma
-const NO_WEAPON_MODES = new Set(['gungame', 'kilic', 'kral', 'awp']);
-const NO_HEALTH_MODES = new Set(['awp']);
+const NO_WEAPON_MODES = new Set(['gungame', 'kilic', 'kral', 'awp', 'futbol']);
+const NO_HEALTH_MODES = new Set(['awp', 'futbol']);
 // Takim tabanli modlar (takim secimi, dost atesi kapali, takim dogumlari)
-const TEAM_MODES = new Set(['team', 'domination']);
-const ARENAS = new Set(['depot', 'lanes', 'fortress', 'yard', 'crossfire']);
+const TEAM_MODES = new Set(['team', 'domination', 'futbol']);
+const ARENAS = new Set(['depot', 'lanes', 'fortress', 'yard', 'crossfire', 'futbol']);
+
+// ---- Futbol sabitleri (top hissinin kalbi - ayarlanabilir) ----
+const FOOTY_TICK_MS = 33;       // ~30Hz sabit fizik adimi
+const BALL_RADIUS = 0.35;
+const BALL_DAMPING = 1.2;       // zemin surtunmesi: vel *= exp(-1.2*dt)
+// NOT: DRIBBLE_RADIUS ve KICK_RADIUS, topun sürülürken önde durduğu mesafeden (lead)
+// büyük olmalı; aksi halde top kontrolden çıkar / sürerken şut atılamaz.
+// NOT: three.js dikey FOV 75° → yerdeki top ancak ~1.6m'den uzaktayken ekrana girer.
+// Bu yüzden lead mesafeleri bilerek büyük: dururken ~2.0m, koşarken ~2.9m önde (net görünür).
+const DRIBBLE_RADIUS = 4.0;     // bu mesafedeki en yakin oyuncu topu kontrol eder
+const DRIBBLE_DIST = 2.0;       // top dururken oyuncunun bu kadar onunde durur (gorunur)
+const LEAD_PER_SPD = 0.19;      // hiza bagli ekstra one itme (gorunurluk icin)
+const LEAD_MAX = 1.4;           // hiza bagli ekstra mesafe tavani (kosarken ~2.9m one gorunur)
+const DRIBBLE_RESPONSE = 0.07;  // top hedefe bu surede kapanir (kucuk = cevik)
+const DRIBBLE_SMOOTH = 22;      // hiz gecisi yumusatma (jitter onler, kararli)
+const MAX_DRIBBLE_SPD = 13;     // surerken topun max hizi (oyuncudan hizli, one gecebilir)
+const APPROACH_MAX = 2.0;       // topun oyuncuya DOGRU yaklasma hiz tavani (yavaslayinca/donunce ustune gelmesin)
+const KICK_SPEED = 27;          // sut hizi
+const KICK_RADIUS = 3.8;        // sut icin topa yakinlik (lead mesafesini kapsamali)
+// Savunma (Q = tackle): topa uzanip rakibin kontrolunden cikarip one iter
+const TACKLE_RADIUS = 3.0;      // bu mesafedeki topa mudahale edilebilir (lead'i kapsar)
+const TACKLE_POKE_SPEED = 9;    // tackle topu bu hizla one iter (sutten yumusak)
+const TACKLE_LOCKOUT = 0.28;    // mudahaleden sonra kisa sure top serbest (eski surucu kapamaz)
+const TACKLE_COOLDOWN = 0.5;    // oyuncu basina tackle bekleme suresi (sn)
+const KICK_LOCKOUT = 0.4;       // sut sonrasi topu tekrar surmeye kapali sure
+const WALL_RESTITUTION = 0.6;   // kenar duvarlarindan sekme
+const GOAL_TARGET = 5;          // maci kazanmak icin gol sayisi
+const FIELD_HALF = 28;          // saha yari uzunlugu (X ve Z)
+const GOAL_LINE = 26;           // gol cizgisi (|z|)
+const GOAL_HALF_WIDTH = 4;      // kale yari genisligi (X ekseninde)
+// Futbol takim dogumlari: police -Z yarisinda, bandit +Z yarisinda. Topu +Z (bandit kalesi)
+// yonune goturen police gol atar.
+const FOOTY_SPAWNS = {
+  police: [
+    { pos: [-8, 0, -14], yaw: 0 },
+    { pos: [8, 0, -14], yaw: 0 },
+    { pos: [0, 0, -20], yaw: 0 },
+    { pos: [-12, 0, -8], yaw: 0 },
+  ],
+  bandit: [
+    { pos: [8, 0, 14], yaw: Math.PI },
+    { pos: [-8, 0, 14], yaw: Math.PI },
+    { pos: [0, 0, 20], yaw: Math.PI },
+    { pos: [12, 0, 8], yaw: Math.PI },
+  ],
+};
 const SPAWNS = [
   { pos: [-22, 0, -10], yaw: Math.PI * 0.6 },
   { pos: [22, 0, 10], yaw: -Math.PI * 0.4 },
@@ -114,6 +161,11 @@ const TEAM_SPAWNS = {
   ],
 };
 
+function teamSpawnList(mode, team) {
+  if (mode === 'futbol') return FOOTY_SPAWNS[team] || FOOTY_SPAWNS.police;
+  return TEAM_SPAWNS[team];
+}
+
 const ROOMS = new Map();
 
 function genCode() {
@@ -130,6 +182,7 @@ function getRoom(socket) {
 function clearRoomTimers(room) {
   if (room.healthTimer) { clearTimeout(room.healthTimer); room.healthTimer = null; }
   if (room.domTimer) { clearInterval(room.domTimer); room.domTimer = null; }
+  if (room.footyTimer) { clearInterval(room.footyTimer); room.footyTimer = null; }
   for (const t of room.timers) clearTimeout(t);
   room.timers.clear();
 }
@@ -152,6 +205,7 @@ function startGame(room) {
   room.round = 1;
   room.roundActive = true;
   room.teamScores = room.teamScores || { police: 0, bandit: 0 };
+  room.footyScore = { police: 0, bandit: 0 };
   room.packs.clear();
   clearRoomTimers(room);
 
@@ -166,9 +220,115 @@ function startGame(room) {
   const players = [...room.players.values()].map(playerInfo);
   const weapons = [...room.weapons.values()];
 
-  io.to(room.code).emit('start', { players, weapons, arena: room.arena, mode: room.mode, round: room.round, teamScores: room.teamScores, kingProtectMs: room.mode === 'kral' ? KING_START_PROTECT_MS : 0 });
+  io.to(room.code).emit('start', { players, weapons, arena: room.arena, mode: room.mode, round: room.round, teamScores: room.teamScores, kingProtectMs: room.mode === 'kral' ? KING_START_PROTECT_MS : 0, footyScore: room.footyScore });
   if (!NO_HEALTH_MODES.has(room.mode)) scheduleHealthPack(room);
   if (room.mode === 'domination') startDomination(room);
+  if (room.mode === 'futbol') startFooty(room);
+}
+
+// ---- Futbol dongusu (sunucu-otoriter top fizigi) ----
+function resetBall(room) {
+  room.ball = { pos: [0, BALL_RADIUS, 0], vel: [0, 0, 0] };
+  room.kickLock = 0.6; // kickoff: kisa sure sertce surulup kapilmasin
+}
+
+function startFooty(room) {
+  resetBall(room);
+  room.roundActive = true;
+  if (room.footyTimer) clearInterval(room.footyTimer);
+  room.footyTimer = setInterval(() => footyTick(room), FOOTY_TICK_MS);
+}
+
+function footyTick(room) {
+  if (!ROOMS.has(room.code) || !room.started || room.mode !== 'futbol' || !room.ball) return;
+  const dt = FOOTY_TICK_MS / 1000;
+  const ball = room.ball;
+  if (room.kickLock > 0) room.kickLock = Math.max(0, room.kickLock - dt);
+
+  // Her oyuncunun hızını tahmin et (yumuşatılmış) — sürerken topu öne itmek için
+  for (const p of room.players.values()) {
+    if (p._px === undefined) { p._px = p.pos[0]; p._pz = p.pos[2]; p._spd = 0; }
+    const inst = Math.hypot(p.pos[0] - p._px, p.pos[2] - p._pz) / dt;
+    p._spd += (inst - p._spd) * Math.min(1, 8 * dt);
+    p._px = p.pos[0]; p._pz = p.pos[2];
+  }
+
+  // Sürme: topa en yakın oyuncuyu bul (kontrol mesafesinde)
+  if (room.kickLock <= 0) {
+    let owner = null, ownerDist = DRIBBLE_RADIUS * DRIBBLE_RADIUS;
+    for (const p of room.players.values()) {
+      if (p.hp <= 0) continue;
+      const dx = p.pos[0] - ball.pos[0], dz = p.pos[2] - ball.pos[2];
+      const d2 = dx * dx + dz * dz;
+      if (d2 < ownerDist) { ownerDist = d2; owner = p; }
+    }
+    if (owner) {
+      // Topun durması gereken hedef: bakış yönünde, hıza bağlı ileri mesafe
+      // (dururken yakın → görünür; koşarken daha önde → kameranın görüş alanında)
+      const dirx = -Math.sin(owner.yaw), dirz = -Math.cos(owner.yaw);
+      const lead = DRIBBLE_DIST + Math.min(LEAD_MAX, LEAD_PER_SPD * owner._spd);
+      const tx = owner.pos[0] + dirx * lead;
+      const tz = owner.pos[2] + dirz * lead;
+      // Hedefe DRIBBLE_RESPONSE sürede ulaşacak istenen hız (kararlı, salınımsız)
+      let desVx = (tx - ball.pos[0]) / DRIBBLE_RESPONSE;
+      let desVz = (tz - ball.pos[2]) / DRIBBLE_RESPONSE;
+      const sp = Math.hypot(desVx, desVz);
+      if (sp > MAX_DRIBBLE_SPD) { const k = MAX_DRIBBLE_SPD / sp; desVx *= k; desVz *= k; }
+      // Topun oyuncuya DOĞRU yaklaşma hızını sınırla: yavaşlayınca/geri dönünce top
+      // yumuşakça toplanır, oyuncunun üstüne hızla gelmez. YALNIZCA top lead mesafesinin
+      // ötesindeyken (geri çekilme/dönüş) uygulanır; öne sürerken (yakın bölge) engellemez.
+      const toPx = owner.pos[0] - ball.pos[0], toPz = owner.pos[2] - ball.pos[2];
+      const tpLen = Math.hypot(toPx, toPz) || 1;
+      const nx = toPx / tpLen, nz = toPz / tpLen;
+      const approach = desVx * nx + desVz * nz; // pozitif = oyuncuya doğru
+      // Hareketsiz (yerinde dönüş) ya da top lead'in ötesindeyse (yavaşlama) yumuşat;
+      // koşan oyuncunun topu yakalamasını engellemez.
+      if ((tpLen > DRIBBLE_DIST || owner._spd < 2.0) && approach > APPROACH_MAX) {
+        const excess = approach - APPROACH_MAX;
+        desVx -= nx * excess; desVz -= nz * excess;
+      }
+      // İstenen hıza yumuşak geçiş (ani snap yok → akıcı)
+      const a = Math.min(1, DRIBBLE_SMOOTH * dt);
+      ball.vel[0] += (desVx - ball.vel[0]) * a;
+      ball.vel[2] += (desVz - ball.vel[2]) * a;
+    }
+  }
+
+  // Sürtünme (üstel sönüm)
+  const damp = Math.exp(-BALL_DAMPING * dt);
+  ball.vel[0] *= damp; ball.vel[2] *= damp;
+
+  // Entegrasyon
+  ball.pos[0] += ball.vel[0] * dt;
+  ball.pos[2] += ball.vel[2] * dt;
+  ball.pos[1] = BALL_RADIUS;
+
+  // Gol kontrolü: top gol çizgisini kale genişliği içinde geçti mi?
+  if (Math.abs(ball.pos[0]) < GOAL_HALF_WIDTH) {
+    if (ball.pos[2] > GOAL_LINE) { scoreGoal(room, 'police'); return; }   // +Z kalesi -> police gol attı
+    if (ball.pos[2] < -GOAL_LINE) { scoreGoal(room, 'bandit'); return; }  // -Z kalesi -> bandit gol attı
+  }
+
+  // Kenar sekme (gol çizgisi dahil ama kale ağzı hariç X kenarları her zaman duvar)
+  if (ball.pos[0] > FIELD_HALF) { ball.pos[0] = FIELD_HALF; ball.vel[0] = -Math.abs(ball.vel[0]) * WALL_RESTITUTION; }
+  else if (ball.pos[0] < -FIELD_HALF) { ball.pos[0] = -FIELD_HALF; ball.vel[0] = Math.abs(ball.vel[0]) * WALL_RESTITUTION; }
+  const inGoalMouth = Math.abs(ball.pos[0]) < GOAL_HALF_WIDTH;
+  if (!inGoalMouth) {
+    if (ball.pos[2] > FIELD_HALF) { ball.pos[2] = FIELD_HALF; ball.vel[2] = -Math.abs(ball.vel[2]) * WALL_RESTITUTION; }
+    else if (ball.pos[2] < -FIELD_HALF) { ball.pos[2] = -FIELD_HALF; ball.vel[2] = Math.abs(ball.vel[2]) * WALL_RESTITUTION; }
+  }
+
+  io.to(room.code).volatile.emit('ballState', { p: [+ball.pos[0].toFixed(2), +ball.pos[1].toFixed(2), +ball.pos[2].toFixed(2)] });
+}
+
+function scoreGoal(room, team) {
+  room.footyScore[team] = (room.footyScore[team] || 0) + 1;
+  io.to(room.code).emit('goal', { team, score: { ...room.footyScore } });
+  resetBall(room);
+  io.to(room.code).emit('ballState', { p: [0, BALL_RADIUS, 0] });
+  if (room.footyScore[team] >= GOAL_TARGET) {
+    endMatch(room, { winnerTeam: team, mode: 'futbol', footyScore: { ...room.footyScore } });
+  }
 }
 
 // ---- Domination dongusu ----
@@ -211,6 +371,7 @@ function domTick(room) {
 function endMatch(room, payload) {
   room.roundActive = false;
   if (room.domTimer) { clearInterval(room.domTimer); room.domTimer = null; }
+  if (room.footyTimer) { clearInterval(room.footyTimer); room.footyTimer = null; }
   io.to(room.code).emit('gameOver', payload);
   const t = setTimeout(() => {
     room.timers.delete(t);
@@ -229,7 +390,7 @@ function resetRoundPlayers(room) {
   for (const p of room.players.values()) {
     const teamMode = TEAM_MODES.has(room.mode);
     const isKing = room.mode === 'kral' && p.id === room.kingId;
-    const spawnList = room.mode === 'awp' ? AWP_SPAWNS : teamMode ? TEAM_SPAWNS[p.team] : SPAWNS;
+    const spawnList = room.mode === 'awp' ? AWP_SPAWNS : teamMode ? teamSpawnList(room.mode, p.team) : SPAWNS;
     const idx = teamMode ? teamIndex[p.team]++ : i;
     const s = isKing ? KING_SPAWN : spawnList[idx % spawnList.length];
     p.isKing = isKing;
@@ -264,6 +425,20 @@ function spawnPlayer(room, p) {
       idx++;
     }
     const s = AWP_SPAWNS[idx % AWP_SPAWNS.length];
+    p.isKing = false;
+    p.maxHp = 100;
+    p.hp = 100;
+    p.pos = s.pos.slice();
+    p.yaw = s.yaw;
+    p.crouch = false;
+    p.protUntil = Date.now() + SPAWN_PROTECT_MS;
+    return s;
+  }
+  if (room.mode === 'futbol') {
+    const list = teamSpawnList(room.mode, p.team);
+    let idx = 0;
+    for (const o of room.players.values()) { if (o.id === p.id) continue; if (o.team === p.team) idx++; }
+    const s = list[idx % list.length];
     p.isKing = false;
     p.maxHp = 100;
     p.hp = 100;
@@ -447,6 +622,10 @@ io.on('connection', (socket) => {
       roundActive: false,
       teamScores: { police: 0, bandit: 0 },
       kingId: null,
+      ball: null,
+      footyScore: { police: 0, bandit: 0 },
+      footyTimer: null,
+      kickLock: 0,
     };
     ROOMS.set(code, room);
     const team = data && typeof data === 'object' ? data.team : undefined;
@@ -479,6 +658,7 @@ io.on('connection', (socket) => {
         round: room.round,
         teamScores: room.teamScores,
         kingProtectMs: room.mode === 'kral' ? Math.max(0, KING_START_PROTECT_MS) : 0,
+        footyScore: room.footyScore,
       });
       for (const [id, pos] of room.packs) socket.emit('healthSpawn', { id, pos });
       socket.to(room.code).emit('playerJoined', playerInfo(p));
@@ -498,7 +678,7 @@ io.on('connection', (socket) => {
     // Secilen takimin dogum noktalarindan birine yerlestir
     let idx = 0;
     for (const o of room.players.values()) { if (o.id === socket.id) continue; if (o.team === team) idx++; }
-    const list = TEAM_SPAWNS[team];
+    const list = teamSpawnList(room.mode, team);
     const s = list[idx % list.length];
     p.pos = s.pos.slice();
     p.yaw = s.yaw;
@@ -525,6 +705,45 @@ io.on('connection', (socket) => {
     const room = getRoom(socket);
     if (!room || !room.started) return;
     socket.volatile.to(room.code).emit('enemyShoot', data);
+  });
+
+  // Futbol: topa sut cek (space)
+  socket.on('kick', (data) => {
+    const room = getRoom(socket);
+    if (!room || !room.started || room.mode !== 'futbol' || !room.ball) return;
+    const p = room.players.get(socket.id);
+    if (!p || p.hp <= 0) return;
+    if (Number.isFinite(data && data.y)) p.yaw = data.y;
+    const ball = room.ball;
+    const dx = p.pos[0] - ball.pos[0], dz = p.pos[2] - ball.pos[2];
+    if (dx * dx + dz * dz > KICK_RADIUS * KICK_RADIUS) return;
+    const dirx = -Math.sin(p.yaw), dirz = -Math.cos(p.yaw);
+    ball.vel[0] = dirx * KICK_SPEED;
+    ball.vel[2] = dirz * KICK_SPEED;
+    room.kickLock = KICK_LOCKOUT;
+    io.to(room.code).emit('kickFx', { id: socket.id, pos: [ball.pos[0], ball.pos[1], ball.pos[2]] });
+  });
+
+  // Futbol: savunma (Q) — topa uzanıp rakibin kontrolünden çıkar
+  socket.on('tackle', (data) => {
+    const room = getRoom(socket);
+    if (!room || !room.started || room.mode !== 'futbol' || !room.ball) return;
+    const p = room.players.get(socket.id);
+    if (!p || p.hp <= 0) return;
+    const now = Date.now();
+    if (p._lastTackle && now - p._lastTackle < TACKLE_COOLDOWN * 1000) return;
+    p._lastTackle = now;
+    if (Number.isFinite(data && data.y)) p.yaw = data.y;
+    const ball = room.ball;
+    const dx = p.pos[0] - ball.pos[0], dz = p.pos[2] - ball.pos[2];
+    const reached = (dx * dx + dz * dz) <= TACKLE_RADIUS * TACKLE_RADIUS;
+    io.to(room.code).emit('tackleFx', { id: socket.id, pos: [p.pos[0], p.pos[1], p.pos[2]], reached });
+    if (!reached) return;
+    // Topu, mudahale eden oyuncunun bakis yonunde one it + kisa kilit (eski surucu hemen kapamaz)
+    const dirx = -Math.sin(p.yaw), dirz = -Math.cos(p.yaw);
+    ball.vel[0] = dirx * TACKLE_POKE_SPEED;
+    ball.vel[2] = dirz * TACKLE_POKE_SPEED;
+    room.kickLock = TACKLE_LOCKOUT;
   });
 
   socket.on('reloading', () => {
