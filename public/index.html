@@ -113,13 +113,22 @@
     position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%);
     width: 24px; height: 24px;
   }
-  #crosshair::before, #crosshair::after {
-    content: ''; position: absolute; background: #6dff6d;
-    box-shadow: 0 0 3px rgba(0,0,0,0.9);
+  #crosshair i {
+    position: absolute; background: #6dff6d; box-shadow: 0 0 3px rgba(0,0,0,0.9); display: none;
   }
-  #crosshair::before { left: 50%; top: 0; width: 2px; height: 100%; transform: translateX(-50%); }
-  #crosshair::after { top: 50%; left: 0; height: 2px; width: 100%; transform: translateY(-50%); }
-  #crosshair .dotgap { position: absolute; inset: 8px; background: transparent; }
+  #crosshair i.up    { left: 50%; top: 0;    width: 2px; transform: translateX(-50%); }
+  #crosshair i.down  { left: 50%; bottom: 0; width: 2px; transform: translateX(-50%); }
+  #crosshair i.left  { top: 50%; left: 0;    height: 2px; transform: translateY(-50%); }
+  #crosshair i.right { top: 50%; right: 0;   height: 2px; transform: translateY(-50%); }
+  #crosshair i.dot   { left: 50%; top: 50%; width: 4px; height: 4px; border-radius: 50%; transform: translate(-50%, -50%); }
+  /* Tip: nokta */
+  #crosshair.ch-dot i.dot { display: block; }
+  /* Tip: ortası boşluk (kollar merkeze değmez) */
+  #crosshair.ch-gap i.up, #crosshair.ch-gap i.down { height: 8px; display: block; }
+  #crosshair.ch-gap i.left, #crosshair.ch-gap i.right { width: 8px; display: block; }
+  /* Tip: tam artı (kollar merkezde birleşir) */
+  #crosshair.ch-cross i.up, #crosshair.ch-cross i.down { height: 12px; display: block; }
+  #crosshair.ch-cross i.left, #crosshair.ch-cross i.right { width: 12px; display: block; }
 
   #hitmarker {
     position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%) rotate(45deg);
@@ -315,6 +324,12 @@
       </div>
     </div>
     <div class="sens-row"><span>🖱️ Hassasiyet</span><input type="range" id="sens-slider" min="0.2" max="3" step="0.05" value="1"><b id="sens-val">1.00</b></div>
+    <div class="section-label">NİŞANGAH</div>
+    <div class="mode-row" id="cross-row">
+      <div class="mode-card sel" data-cross="cross"><strong>Artı ➕</strong><span>Standart çizgi</span></div>
+      <div class="mode-card" data-cross="gap"><strong>Boşluklu ✛</strong><span>Ortası açık</span></div>
+      <div class="mode-card" data-cross="dot"><strong>Nokta •</strong><span>Tek nokta</span></div>
+    </div>
     <div class="section-label">OYUN MODU</div>
     <div class="mode-row" id="mode-row">
       <div class="mode-card sel" data-mode="duel"><strong>Duel</strong><span>2 kisilik klasik oda</span></div>
@@ -383,7 +398,7 @@
 <!-- HUD -->
 <div id="hud">
   <div id="dmg-vignette"></div>
-  <div id="crosshair"></div>
+  <div id="crosshair" class="ch-cross"><i class="up"></i><i class="down"></i><i class="left"></i><i class="right"></i><i class="dot"></i></div>
   <div id="hitmarker"><span></span><span></span><span></span><span></span></div>
   <div id="score"><span class="me" id="score-me-name">Sen</span> <span id="score-me">0</span> &nbsp;—&nbsp; <span id="score-en">0</span> <span class="en" id="score-en-name">Rakip</span></div>
   <div id="futbol-score"><span class="fs-pol">🚔 <b id="fs-pol">0</b></span><span class="fs-sep">:</span><span class="fs-ban"><b id="fs-ban">0</b> 🦹</span></div>

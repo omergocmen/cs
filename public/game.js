@@ -255,6 +255,26 @@ document.querySelectorAll('.avatar-card').forEach((card) => {
   };
 });
 
+// ---- Nişangah tipi (nokta / boşluklu / tam artı) ----
+let myCross = localStorage.getItem('cs_cross') || 'cross';
+if (!['cross', 'gap', 'dot'].includes(myCross)) myCross = 'cross';
+function applyCrosshair(type) {
+  const el = $('crosshair');
+  if (!el) return;
+  el.classList.remove('ch-cross', 'ch-gap', 'ch-dot');
+  el.classList.add('ch-' + type);
+}
+document.querySelectorAll('[data-cross]').forEach((card) => {
+  card.classList.toggle('sel', card.dataset.cross === myCross);
+  card.onclick = () => {
+    myCross = card.dataset.cross;
+    localStorage.setItem('cs_cross', myCross);
+    document.querySelectorAll('[data-cross]').forEach((c) => c.classList.toggle('sel', c === card));
+    applyCrosshair(myCross);
+  };
+});
+applyCrosshair(myCross);
+
 $('btn-create').onclick = () => {
   myName = $('name-input').value.trim() || 'Oyuncu';
   socket.emit('createRoom', { name: myName, avatar: myAvatar, mode: gameMode, arena: arenaChoice }, (res) => {
