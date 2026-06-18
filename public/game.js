@@ -48,6 +48,12 @@ const AVATARS = {
   polis:   { body: 0x24407e, legs: 0x1a2747, skin: 0xe8b882, gear: 'cap',  gearColor: 0x16294f },
   haydut:  { body: 0x5a4632, legs: 0x33291d, skin: 0x23232a, gear: 'mask', gearColor: 0x23232a },
   hayalet: { body: 0x8f9aa8, legs: 0x5d6672, skin: 0xece2d4, gear: 'hood', gearColor: 0x454c58 },
+  // --- Komik karakterler ---
+  palyaco: { body: 0xff3b5c, legs: 0x3bc1ff, skin: 0xfff0e6, gear: 'clown',   gearColor: 0xffd23b }, // 🤡 Palyaço
+  prenses: { body: 0xff7ec8, legs: 0xffffff, skin: 0xffe0c4, gear: 'bow',     gearColor: 0xff9ed6 }, // 👑 Prenses (pembe-beyaz)
+  uzayli:  { body: 0x57c84d, legs: 0x2f8f2f, skin: 0x86e57f, gear: 'antenna', gearColor: 0x2f8f2f }, // 👽 Uzaylı
+  robot:   { body: 0xb4bcc8, legs: 0x7a828e, skin: 0xd8dee8, gear: 'visor',   gearColor: 0x222a36 }, // 🤖 Robot
+  sapsal:  { body: 0xc77b3a, legs: 0x6b4a2a, skin: 0xe8b882, gear: 'glasses', gearColor: 0x14161c }, // 🤓 Şapşal
 };
 
 const STAND_EYE_HEIGHT = 1.6;
@@ -398,11 +404,16 @@ function applyArenaTheme(arena = 'depot') {
 }
 
 const camera = new THREE.PerspectiveCamera(75, innerWidth / innerHeight, 0.05, 300);
-const renderer = new THREE.WebGLRenderer({ antialias: true });
+camera.rotation.order = 'YXZ'; // bir kez ayarla (her karede tekrar atamaya gerek yok)
+// powerPreference: dizüstülerde ayrık GPU tercih edilir; daha akıcı kare hızı
+const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
 renderer.setSize(innerWidth, innerHeight);
 renderer.setPixelRatio(Math.min(devicePixelRatio, 1.5));
 renderer.shadowMap.enabled = true;
 renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+// Gölge haritasını her karede değil, animate içinde iki karede bir yenile (~30Hz).
+// Statik geometri + oyuncu gölgeleri için fark edilmez; gölge GPU maliyetini ~yarıya indirir.
+renderer.shadowMap.autoUpdate = false;
 document.body.appendChild(renderer.domElement);
 
 addEventListener('resize', () => {
@@ -436,6 +447,9 @@ function box(x, z, w, d, h, color, rotY = 0) {
   m.rotation.y = rotY;
   m.castShadow = true;
   m.receiveShadow = true;
+  // Duvar/kasa statiktir: matrisi bir kez hesapla, her karede tekrar güncelleme
+  m.updateMatrix();
+  m.matrixAutoUpdate = false;
   scene.add(m);
   solids.push(m);
   if (rotY === 0) colliders.push({ x, z, w, d, h });
@@ -453,6 +467,8 @@ function box(x, z, w, d, h, color, rotY = 0) {
   );
   floorMesh.rotation.x = -Math.PI / 2;
   floorMesh.receiveShadow = true;
+  floorMesh.updateMatrix();
+  floorMesh.matrixAutoUpdate = false; // statik zemin
   scene.add(floorMesh);
   solids.push(floorMesh);
 }
@@ -1127,6 +1143,67 @@ function createEnemy(info) {
     const hood = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.36, 0.46), gearMat);
     hood.position.set(0, 1.95, 0.05);
     group.add(hood);
+  } else if (av.gear === 'clown') {
+    // Palyaço: kırmızı burun + yanlarda renkli saç tutamları + tepede ufak şapka
+    const nose = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.1, 0.1), new THREE.MeshStandardMaterial({ color: 0xff2b2b }));
+    nose.position.set(0, 1.80, -0.235);
+    const hairMat = new THREE.MeshStandardMaterial({ color: av.gearColor, roughness: 0.95 });
+    for (const sx of [-1, 1]) {
+      const tuft = new THREE.Mesh(new THREE.BoxGeometry(0.14, 0.2, 0.3), hairMat);
+      tuft.position.set(sx * 0.28, 1.92, 0);
+      group.add(tuft);
+    }
+    const hat = new THREE.Mesh(new THREE.BoxGeometry(0.2, 0.18, 0.2), new THREE.MeshStandardMaterial({ color: 0x3bc1ff }));
+    hat.position.set(0, 2.12, 0);
+    group.add(nose, hat);
+  } else if (av.gear === 'bow') {
+    // Prenses: pembe fiyonk + beyaz uzun saç (yanlarda)
+    const bowMat = new THREE.MeshStandardMaterial({ color: av.gearColor, roughness: 0.6 });
+    const knot = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.11, 0.11), bowMat);
+    knot.position.set(0, 2.06, 0);
+    group.add(knot);
+    for (const sx of [-1, 1]) {
+      const wing = new THREE.Mesh(new THREE.BoxGeometry(0.16, 0.18, 0.08), bowMat);
+      wing.position.set(sx * 0.16, 2.06, 0);
+      group.add(wing);
+    }
+    const hairMat = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.8 });
+    for (const sx of [-1, 1]) {
+      const hair = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.5, 0.44), hairMat);
+      hair.position.set(sx * 0.26, 1.7, 0.02);
+      group.add(hair);
+    }
+  } else if (av.gear === 'antenna') {
+    // Uzaylı: iki anten + parlayan uçlar
+    const stalkMat = new THREE.MeshStandardMaterial({ color: av.gearColor });
+    const ballMat = new THREE.MeshBasicMaterial({ color: 0xc7ff4d });
+    for (const sx of [-1, 1]) {
+      const stalk = new THREE.Mesh(new THREE.BoxGeometry(0.03, 0.18, 0.03), stalkMat);
+      stalk.position.set(sx * 0.12, 2.12, 0);
+      const ball = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.08, 0.08), ballMat);
+      ball.position.set(sx * 0.12, 2.23, 0);
+      group.add(stalk, ball);
+    }
+  } else if (av.gear === 'visor') {
+    // Robot: gözleri örten vizör + tepede kırmızı uçlu anten
+    const visor = new THREE.Mesh(new THREE.BoxGeometry(0.44, 0.13, 0.04), new THREE.MeshStandardMaterial({ color: av.gearColor, metalness: 0.6, roughness: 0.3 }));
+    visor.position.set(0, 1.86, -0.245);
+    const ant = new THREE.Mesh(new THREE.BoxGeometry(0.03, 0.14, 0.03), new THREE.MeshStandardMaterial({ color: av.gearColor }));
+    ant.position.set(0, 2.1, 0);
+    const tip = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.06, 0.06), new THREE.MeshBasicMaterial({ color: 0xff4d4d }));
+    tip.position.set(0, 2.2, 0);
+    group.add(visor, ant, tip);
+  } else if (av.gear === 'glasses') {
+    // Şapşal: kalın çerçeveli gözlük (komik)
+    const frameMat = new THREE.MeshStandardMaterial({ color: av.gearColor });
+    for (const sx of [-1, 1]) {
+      const lens = new THREE.Mesh(new THREE.BoxGeometry(0.13, 0.13, 0.03), frameMat);
+      lens.position.set(sx * 0.1, 1.87, -0.24);
+      group.add(lens);
+    }
+    const bridge = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.03, 0.03), frameMat);
+    bridge.position.set(0, 1.87, -0.24);
+    group.add(bridge);
   }
   // 'mask' (haydut): kafa rengi zaten koyu kar maskesi, gözler beyaz parlıyor
 
@@ -1181,10 +1258,26 @@ function setEnemyCrouch(enemy, crouch) {
   updateEnemyScale(enemy);
 }
 
+// Bir Object3D ağacındaki tüm geometri/materyal/dokuları serbest bırak (GPU bellek sızıntısını önler).
+// Rakip modelleri ve isim etiketleri her doğuşta yeniden üretildiğinden uzun oturumlarda kritik.
+function disposeObject3D(obj) {
+  obj.traverse((o) => {
+    if (o.geometry) o.geometry.dispose();
+    const mats = Array.isArray(o.material) ? o.material : (o.material ? [o.material] : []);
+    for (const m of mats) {
+      if (m.map) m.map.dispose();
+      m.dispose();
+    }
+  });
+}
+
 // Rakibin takimini degistir (isim etiketi rengini de gunceller)
 function setEnemyTeam(enemy, team) {
   enemy.team = team;
-  if (enemy.nameTag) enemy.group.remove(enemy.nameTag);
+  if (enemy.nameTag) {
+    enemy.group.remove(enemy.nameTag);
+    disposeObject3D(enemy.nameTag); // eski etiketin CanvasTexture'ını bırak
+  }
   const tag = makeNameSprite(enemy.name, team);
   enemy.group.add(tag);
   enemy.nameTag = tag;
@@ -1195,6 +1288,7 @@ function removeEnemy(id) {
   const enemy = enemies.get(id);
   if (!enemy) return;
   scene.remove(enemy.group);
+  disposeObject3D(enemy.group);
   enemies.delete(id);
 }
 
@@ -2430,6 +2524,13 @@ function updateNetStats(now) {
   }
 }
 
+// Hareket hesaplarında her karede yeniden ayırma yapmamak için geçici vektörler
+const _mvFwd = new THREE.Vector3();
+const _mvRight = new THREE.Vector3();
+const _mvMove = new THREE.Vector3();
+let lastMenuRender = 0;
+let shadowTick = 0;
+
 function animate() {
   requestAnimationFrame(animate);
   const dt = Math.min(clock.getDelta(), 0.05);
@@ -2440,9 +2541,9 @@ function animate() {
   if (gameRunning) {
     // --- Hareket ---
     if (player.alive && document.pointerLockElement === document.body) {
-      const fwd = new THREE.Vector3(-Math.sin(player.yaw), 0, -Math.cos(player.yaw));
-      const right = new THREE.Vector3(-fwd.z, 0, fwd.x);
-      const move = new THREE.Vector3();
+      const fwd = _mvFwd.set(-Math.sin(player.yaw), 0, -Math.cos(player.yaw));
+      const right = _mvRight.set(-fwd.z, 0, fwd.x);
+      const move = _mvMove.set(0, 0, 0);
       if (keys['KeyW']) move.add(fwd);
       if (keys['KeyS']) move.sub(fwd);
       if (keys['KeyD']) move.add(right);
@@ -2494,7 +2595,6 @@ function animate() {
     const targetEye = player.crouch ? CROUCH_EYE_HEIGHT : STAND_EYE_HEIGHT;
     player.eyeHeight += (targetEye - player.eyeHeight) * Math.min(1, dt * 14);
     camera.position.set(player.pos.x, player.pos.y + player.eyeHeight, player.pos.z);
-    camera.rotation.order = 'YXZ';
     camera.rotation.y = player.yaw;
     camera.rotation.x = player.pitch;
     if (screenShake > 0) {
@@ -2666,6 +2766,16 @@ function animate() {
     }
   }
 
-  renderer.render(scene, camera);
+  // Oyun çalışırken tam hız; menü/lobi gibi durumlarda sahne neredeyse opak panel
+  // arkasında kaldığından GPU yükünü düşürmek için ~10fps render etmek yeterli.
+  // Gölge haritası (autoUpdate kapalı) oyun içinde iki karede bir, menüde her render'da yenilenir.
+  if (gameRunning) {
+    if ((shadowTick++ & 1) === 0) renderer.shadowMap.needsUpdate = true;
+    renderer.render(scene, camera);
+  } else if (now - lastMenuRender > 100) {
+    lastMenuRender = now;
+    renderer.shadowMap.needsUpdate = true;
+    renderer.render(scene, camera);
+  }
 }
 animate();

@@ -39,9 +39,9 @@
 
   /* Avatar secici */
   .section-label { text-align: left; font-size: 10px; letter-spacing: 1px; color: #56627d; margin: 2px 0 5px; }
-  .avatars { display: flex; gap: 7px; margin-bottom: 10px; }
+  .avatars { display: flex; flex-wrap: wrap; justify-content: center; gap: 7px; margin-bottom: 10px; }
   .avatar-card {
-    flex: 1; background: #10141d; border: 2px solid #2e3a52; border-radius: 10px;
+    flex: 1 1 26%; min-width: 70px; background: #10141d; border: 2px solid #2e3a52; border-radius: 10px;
     padding: 7px 4px 5px; cursor: pointer; transition: border-color .15s, transform .1s, background .15s;
   }
   .avatar-card:hover { transform: translateY(-2px); }
@@ -292,6 +292,26 @@
       <div class="avatar-card" data-av="hayalet">
         <div class="av-head" style="background:#ece2d4"><div class="av-gear" style="background:#454c58;height:10px;top:-4px;left:-3px;right:-3px"></div><div class="av-eye l"></div><div class="av-eye r"></div></div>
         <div class="av-body" style="background:#8f9aa8"></div><span>Hayalet</span>
+      </div>
+      <div class="avatar-card" data-av="palyaco">
+        <div class="av-head" style="background:#fff0e6"><div class="av-gear" style="background:#ffd23b"></div><div class="av-eye l"></div><div class="av-eye r"></div><div style="position:absolute;left:50%;top:11px;width:6px;height:6px;margin-left:-3px;background:#ff2b2b;border-radius:50%"></div></div>
+        <div class="av-body" style="background:#ff3b5c"></div><span>Palyaço</span>
+      </div>
+      <div class="avatar-card" data-av="prenses">
+        <div class="av-head" style="background:#ffe0c4"><div class="av-gear" style="background:#ff9ed6"></div><div class="av-eye l"></div><div class="av-eye r"></div></div>
+        <div class="av-body" style="background:#ff7ec8"></div><span>Prenses</span>
+      </div>
+      <div class="avatar-card" data-av="uzayli">
+        <div class="av-head" style="background:#86e57f"><div class="av-gear" style="background:#2f8f2f"></div><div class="av-eye l"></div><div class="av-eye r"></div></div>
+        <div class="av-body" style="background:#57c84d"></div><span>Uzaylı</span>
+      </div>
+      <div class="avatar-card" data-av="robot">
+        <div class="av-head" style="background:#d8dee8"><div class="av-gear" style="background:#222a36;height:6px;top:8px"></div><div class="av-eye l"></div><div class="av-eye r"></div></div>
+        <div class="av-body" style="background:#b4bcc8"></div><span>Robot</span>
+      </div>
+      <div class="avatar-card" data-av="sapsal">
+        <div class="av-head" style="background:#e8b882"><div class="av-gear" style="background:#14161c;height:6px;top:8px"></div><div class="av-eye l"></div><div class="av-eye r"></div></div>
+        <div class="av-body" style="background:#c77b3a"></div><span>Şapşal</span>
       </div>
     </div>
     <div class="sens-row"><span>🖱️ Hassasiyet</span><input type="range" id="sens-slider" min="0.2" max="3" step="0.05" value="1"><b id="sens-val">1.00</b></div>
