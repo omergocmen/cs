@@ -2115,6 +2115,8 @@ socket.on('start', ({ players, weapons, arena, mode, round, teamScores: scores, 
   $('menu').style.display = 'none';
   $('hud').style.display = 'block';
   $('death-overlay').style.display = 'none';
+  scoreboardPinned = false;
+  showScoreboard(false);
   $('roomtag-code').textContent = roomCode;
   gameRunning = true;
   updateHpHUD(); updateAmmoHUD(); updateScoreHUD();
@@ -2260,7 +2262,8 @@ socket.on('death', ({ victim, killer, headshot, scores }) => {
       return;
     }
     $('death-overlay').style.display = 'flex';
-    showScoreboard(true); // oldugunde skor tablosunu goster
+    if (scoreboardPinned) renderScoreboard();
+    else showScoreboard(false);
     if (gameMode === 'team' || gameMode === 'kilic') {
       $('respawn-count').textContent = '';
       $('death-overlay').querySelector('p').textContent = 'Round bitene kadar bekliyorsun...';
