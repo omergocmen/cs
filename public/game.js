@@ -63,7 +63,9 @@ const MOVE_SPEED = 7.5;
 const CROUCH_SPEED = 3.8;
 const JUMP_VEL = 8;
 const GRAVITY = 22;
-const SEND_INTERVAL = 50; // ms
+const SEND_INTERVAL = 33; // ms (~30Hz)
+const ENEMY_INTERP_DELAY = 100; // ms: gelen hareket paketlerini kisa bir gecikmeyle yumusat
+const ENEMY_EXTRAP_MAX = 100;   // ms: paket gecikince son cizgide en fazla bu kadar ileri tahmin et
 
 // ================== SOKET + MENÜ ==================
 const socket = io();
@@ -1240,6 +1242,8 @@ function createEnemy(info) {
     id: info.id, name: info.name, group, head, body, legs, armL, armR,
     targetPos: new THREE.Vector3(info.pos[0], info.pos[1], info.pos[2]),
     targetYaw: info.yaw || 0,
+    interpPos: new THREE.Vector3(info.pos[0], info.pos[1], info.pos[2]),
+    moveSamples: [{ t: performance.now(), p: [info.pos[0], info.pos[1], info.pos[2]], y: info.yaw || 0 }],
     hp: info.hp, maxHp: info.maxHp || 100, isKing: !!info.isKing, kills: info.kills || 0, deaths: info.deaths || 0, alive: info.hp > 0, protUntil: 0, crouch: !!info.crouch, nameTag, team: info.team || null,
   };
   setEnemyCrouch(enemy, !!info.crouch);
@@ -1276,6 +1280,58 @@ function updateEnemyScale(enemy) {
 function setEnemyCrouch(enemy, crouch) {
   enemy.crouch = crouch;
   updateEnemyScale(enemy);
+}
+
+function smoothYaw(current, target, factor) {
+  let dy = target - current;
+  while (dy > Math.PI) dy -= Math.PI * 2;
+  while (dy < -Math.PI) dy += Math.PI * 2;
+  return current + dy * factor;
+}
+
+function updateEnemyInterpolation(enemy, now, dt) {
+  const samples = enemy.moveSamples;
+  const renderAt = now - ENEMY_INTERP_DELAY;
+  // Render zamanindan eski örnekleri at ama bracket/extrapolasyon icin en az 2 örnek birak.
+  while (samples.length > 2 && samples[1].t <= renderAt) samples.shift();
+
+  let targetYaw = enemy.targetYaw;
+  if (samples.length >= 2 && samples[0].t <= renderAt) {
+    const a = samples[0], b = samples[1];
+    const span = Math.max(1, b.t - a.t);
+    // renderAt iki örnek arasindaysa interpolasyon; ilerisindeyse SINIRLI extrapolasyon.
+    // Boylece paket gecikince model donup sonra ziplamaz; ayni cizgide devam edip
+    // yeni paket gelince kucuk bir duzeltmeyle suruyor (gorunur teleportu azaltir).
+    const kMax = 1 + ENEMY_EXTRAP_MAX / span;
+    const k = Math.min(Math.max((renderAt - a.t) / span, 0), kMax);
+    enemy.interpPos.set(
+      a.p[0] + (b.p[0] - a.p[0]) * k,
+      a.p[1] + (b.p[1] - a.p[1]) * k,
+      a.p[2] + (b.p[2] - a.p[2]) * k,
+    );
+    enemy.group.position.copy(enemy.interpPos);
+    // Yaw'i en kisa yaydan interpole et (±π sinirinda ters donmesin)
+    let dyaw = b.y - a.y;
+    while (dyaw > Math.PI) dyaw -= Math.PI * 2;
+    while (dyaw < -Math.PI) dyaw += Math.PI * 2;
+    targetYaw = a.y + dyaw * Math.min(k, 1);
+  } else {
+    // Henuz iki örnek yok (yeni dogan rakip): son hedefe yumusak yaklas.
+    enemy.group.position.lerp(enemy.targetPos, Math.min(1, dt * 12));
+    enemy.interpPos.copy(enemy.group.position);
+  }
+
+  if (enemy.alive) {
+    enemy.group.rotation.y = smoothYaw(enemy.group.rotation.y, targetYaw, Math.min(1, dt * 12));
+  }
+}
+
+function resetEnemyMotion(enemy, pos, yaw = enemy.targetYaw) {
+  enemy.group.position.set(pos[0], pos[1] || 0, pos[2]);
+  enemy.targetPos.set(pos[0], pos[1] || 0, pos[2]);
+  enemy.interpPos.copy(enemy.targetPos);
+  enemy.targetYaw = yaw;
+  enemy.moveSamples = [{ t: performance.now(), p: [enemy.targetPos.x, enemy.targetPos.y, enemy.targetPos.z], y: yaw }];
 }
 
 // Bir Object3D ağacındaki tüm geometri/materyal/dokuları serbest bırak (GPU bellek sızıntısını önler).
@@ -1461,7 +1517,7 @@ function groundHeightAt(x, z) {
   return h;
 }
 
-function resolveCollisions() {
+function resolveCollisions(axis = null) {
   const p = player.pos;
   for (const b of colliders) {
     // Üstündeysek yatay itme yok
@@ -1472,7 +1528,9 @@ function resolveCollisions() {
       const dxl = p.x - minX, dxr = maxX - p.x;
       const dzl = p.z - minZ, dzr = maxZ - p.z;
       const m = Math.min(dxl, dxr, dzl, dzr);
-      if (m === dxl) p.x = minX;
+      if (axis === 'x') p.x = dxl < dxr ? minX : maxX;
+      else if (axis === 'z') p.z = dzl < dzr ? minZ : maxZ;
+      else if (m === dxl) p.x = minX;
       else if (m === dxr) p.x = maxX;
       else if (m === dzl) p.z = minZ;
       else p.z = maxZ;
@@ -1564,40 +1622,84 @@ function playBlip(freq, dur = 0.08, vol = 0.2) {
 // ================== ATEŞ ETME + EFEKTLER ==================
 const raycaster = new THREE.Raycaster();
 const tracers = [];   // {mesh, life}
-const particles = []; // {pts, vels, life, max, grav}
+const particles = []; // {pts, vels, positions, count, life, max, grav}
 const shells = [];    // {mesh, vel, rvel, life}
+
+// --- Nesne havuzlari ---
+// Catismada her mermi/isabette geometri olusturup yok etmek (GPU buffer churn + GC)
+// ani FPS dususlerine ("60 -> 54 takilma") yol aciyordu. Asagidaki havuzlar efekt
+// nesnelerini yeniden kullanir: create/dispose tekrar etmez, sadece reset edilir.
+const TRACER_POOL = [];
+const tracerGeo = new THREE.CylinderGeometry(0.012, 0.012, 1, 4, 1);
+tracerGeo.rotateX(Math.PI / 2); // uzun eksen -> local Z (lookAt ile hizalanir, scale.z ile uzar)
+
+const PARTICLE_CAP = 24; // tek efektteki azami nokta sayisi (havuzlanan tampon boyutu)
+const PARTICLE_POOL = [];
+
+const SHELL_POOL = [];
+const shellGeo = new THREE.CylinderGeometry(0.015, 0.015, 0.05, 6);
+const shellMat = new THREE.MeshStandardMaterial({ color: 0xc9a227, metalness: 0.8, roughness: 0.3 });
+
+// Ates yolu icin scratch vektorler (saçma basina new Vector3 / clone cöpünü onler)
+const _shotOrigin = new THREE.Vector3();
+const _shotBaseDir = new THREE.Vector3();
+const _shotMuzzle = new THREE.Vector3();
+const _shotDir = new THREE.Vector3();
+const _shotEnd = new THREE.Vector3();
+const _shellA = new THREE.Vector3();
+const _shellB = new THREE.Vector3();
 
 function addTracer(from, to) {
   const len = from.distanceTo(to);
   if (len < 0.5) return;
-  const geo = new THREE.CylinderGeometry(0.012, 0.012, len, 4, 1);
-  geo.rotateX(Math.PI / 2);
-  const mat = new THREE.MeshBasicMaterial({
-    color: 0xffd9a0, transparent: true, opacity: 0.85,
-    blending: THREE.AdditiveBlending, depthWrite: false,
-  });
-  const m = new THREE.Mesh(geo, mat);
+  let t = TRACER_POOL.pop();
+  if (!t) {
+    const mat = new THREE.MeshBasicMaterial({
+      color: 0xffd9a0, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false,
+    });
+    t = { mesh: new THREE.Mesh(tracerGeo, mat), life: 0 }; // paylasilan geometri, kendi materyali
+  }
+  const m = t.mesh;
+  m.material.opacity = 0.85;
   m.position.copy(from).lerp(to, 0.5);
   m.lookAt(to);
+  m.scale.set(1, 1, len); // tek birimlik silindiri gereken uzunluga ölcekle
+  m.visible = true;
   scene.add(m);
-  tracers.push({ mesh: m, life: 0.08 });
+  t.life = 0.08;
+  tracers.push(t);
 }
 
 function spawnParticles(pos, color, count, speed, grav, life, size = 0.05) {
-  const positions = new Float32Array(count * 3);
-  const vels = [];
+  count = Math.min(count, PARTICLE_CAP);
+  let p = PARTICLE_POOL.pop();
+  if (!p) {
+    const positions = new Float32Array(PARTICLE_CAP * 3);
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+    const vels = [];
+    for (let i = 0; i < PARTICLE_CAP; i++) vels.push(new THREE.Vector3());
+    const pts = new THREE.Points(geo, new THREE.PointsMaterial({ size, transparent: true, opacity: 1, depthWrite: false }));
+    p = { pts, vels, positions, count, life, max: life, grav };
+  }
+  const positions = p.positions;
   for (let i = 0; i < count; i++) {
     positions[i * 3] = pos.x;
     positions[i * 3 + 1] = pos.y;
     positions[i * 3 + 2] = pos.z;
-    vels.push(new THREE.Vector3(Math.random() - 0.5, Math.random() * 0.8 + 0.2, Math.random() - 0.5)
-      .normalize().multiplyScalar(speed * (0.4 + Math.random() * 0.6)));
+    p.vels[i].set(Math.random() - 0.5, Math.random() * 0.8 + 0.2, Math.random() - 0.5)
+      .normalize().multiplyScalar(speed * (0.4 + Math.random() * 0.6));
   }
-  const geo = new THREE.BufferGeometry();
-  geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
-  const pts = new THREE.Points(geo, new THREE.PointsMaterial({ color, size, transparent: true, opacity: 1, depthWrite: false }));
-  scene.add(pts);
-  particles.push({ pts, vels, life, max: life, grav });
+  p.count = count; p.life = life; p.max = life; p.grav = grav;
+  const geo = p.pts.geometry;
+  geo.setDrawRange(0, count);
+  geo.attributes.position.needsUpdate = true;
+  p.pts.material.color.set(color);
+  p.pts.material.size = size;
+  p.pts.material.opacity = 1;
+  p.pts.visible = true;
+  scene.add(p.pts);
+  particles.push(p);
 }
 
 function impactEffect(point, isFlesh) {
@@ -1610,15 +1712,21 @@ function impactEffect(point, isFlesh) {
 }
 
 function ejectShell() {
-  const mesh = new THREE.Mesh(
-    new THREE.CylinderGeometry(0.015, 0.015, 0.05, 6),
-    new THREE.MeshStandardMaterial({ color: 0xc9a227, metalness: 0.8, roughness: 0.3 })
-  );
-  mesh.position.copy(gunGroup.localToWorld(new THREE.Vector3(0.05, 0.05, -0.1)));
-  const right = new THREE.Vector3(1, 0, 0).applyQuaternion(camera.quaternion);
-  const vel = right.multiplyScalar(1.5 + Math.random()).add(new THREE.Vector3(0, 2.2 + Math.random(), 0));
+  let s = SHELL_POOL.pop();
+  if (!s) {
+    s = { mesh: new THREE.Mesh(shellGeo, shellMat), vel: new THREE.Vector3(), rvel: new THREE.Vector3(), life: 0 };
+  }
+  const mesh = s.mesh;
+  mesh.position.copy(gunGroup.localToWorld(_shellA.set(0.05, 0.05, -0.1)));
+  mesh.rotation.set(0, 0, 0);
+  const right = _shellB.set(1, 0, 0).applyQuaternion(camera.quaternion);
+  s.vel.copy(right).multiplyScalar(1.5 + Math.random());
+  s.vel.y += 2.2 + Math.random();
+  s.rvel.set(Math.random() * 8, Math.random() * 8, 0);
+  s.life = 1.1;
+  mesh.visible = true;
   scene.add(mesh);
-  shells.push({ mesh, vel, rvel: new THREE.Vector3(Math.random() * 8, Math.random() * 8, 0), life: 1.1 });
+  shells.push(s);
 }
 
 function tryShoot() {
@@ -1646,9 +1754,9 @@ function tryShoot() {
   player.pitch += g.kick * (0.8 + Math.random() * 0.4);
   player.yaw += (Math.random() - 0.5) * g.kick * 0.5;
 
-  const origin = camera.getWorldPosition(new THREE.Vector3());
-  const baseDir = new THREE.Vector3(0, 0, -1).applyQuaternion(camera.quaternion);
-  const muzzle = gunGroup.localToWorld(new THREE.Vector3(0, 0.02, -0.7));
+  const origin = camera.getWorldPosition(_shotOrigin);
+  const baseDir = _shotBaseDir.set(0, 0, -1).applyQuaternion(camera.quaternion);
+  const muzzle = gunGroup.localToWorld(_shotMuzzle.set(0, 0.02, -0.7));
 
   const targets = [...solids];
   for (const e of enemies.values()) {
@@ -1661,7 +1769,7 @@ function tryShoot() {
 
   // Pompalı 8 saçma atar, diğerleri tek mermi
   for (let i = 0; i < g.pellets; i++) {
-    const dir = baseDir.clone();
+    const dir = _shotDir.copy(baseDir);
     const sp = player.zoomed ? 0 : g.spread;
     dir.x += (Math.random() - 0.5) * sp * 2;
     dir.y += (Math.random() - 0.5) * sp * 2;
@@ -1672,7 +1780,7 @@ function tryShoot() {
     raycaster.far = 200;
     const hits = raycaster.intersectObjects(targets, false);
 
-    let endPoint = origin.clone().add(dir.clone().multiplyScalar(120));
+    let endPoint = _shotEnd.copy(origin).addScaledVector(dir, 120);
     if (hits.length > 0) {
       endPoint = hits[0].point;
       const part = hits[0].object.userData.part;
@@ -2163,8 +2271,15 @@ socket.on('start', ({ players, weapons, arena, mode, round, teamScores: scores, 
 socket.on('enemyMove', (d) => {
   const enemy = enemyById(d.id);
   if (!enemy) return;
+  if (!Array.isArray(d.p) || d.p.length < 3) return;
   enemy.targetPos.set(d.p[0], d.p[1], d.p[2]);
   enemy.targetYaw = d.y;
+  enemy.moveSamples.push({
+    t: performance.now(),
+    p: [d.p[0], d.p[1], d.p[2]],
+    y: Number.isFinite(d.y) ? d.y : enemy.targetYaw,
+  });
+  while (enemy.moveSamples.length > 8) enemy.moveSamples.shift();
   setEnemyCrouch(enemy, !!d.c);
 });
 
@@ -2318,8 +2433,7 @@ socket.on('respawn', ({ id, pos, yaw, hp, maxHp, isKing, prot }) => {
     enemy.maxHp = maxHp || 100;
     enemy.isKing = !!isKing;
     enemy.group.rotation.x = 0;
-    enemy.group.position.set(pos[0], pos[1], pos[2]);
-    enemy.targetPos.set(pos[0], pos[1], pos[2]);
+    resetEnemyMotion(enemy, pos, yaw || enemy.targetYaw);
     enemy.protUntil = Date.now() + (prot || 0); // korumalıyken model yanıp söner
     setEnemyCrouch(enemy, false);
   }
@@ -2343,8 +2457,8 @@ socket.on('teamChanged', ({ id, team, pos, yaw, hp, prot }) => {
     const enemy = enemyById(id);
     if (enemy) {
       setEnemyTeam(enemy, team);
-      if (pos) { enemy.group.position.set(pos[0], pos[1] || 0, pos[2]); enemy.targetPos.set(pos[0], pos[1] || 0, pos[2]); }
-      if (typeof yaw === 'number') enemy.targetYaw = yaw;
+      if (pos) resetEnemyMotion(enemy, pos, typeof yaw === 'number' ? yaw : enemy.targetYaw);
+      else if (typeof yaw === 'number') enemy.targetYaw = yaw;
       if (typeof hp === 'number') { enemy.hp = hp; enemy.alive = hp > 0; }
     }
   }
@@ -2577,8 +2691,9 @@ function animate() {
       player.planarSpeed = move.length(); // futbol top tahmini için (lokal hız)
 
       player.pos.x += move.x * dt;
+      resolveCollisions('x');
       player.pos.z += move.z * dt;
-      resolveCollisions();
+      resolveCollisions('z');
 
       // Yerçekimi
       const ground = groundHeightAt(player.pos.x, player.pos.z);
@@ -2694,13 +2809,7 @@ function animate() {
 
     // Rakip yumuşatma
     for (const enemy of enemies.values()) {
-      enemy.group.position.lerp(enemy.targetPos, Math.min(1, dt * 14));
-      if (enemy.alive) {
-        let dy = enemy.targetYaw - enemy.group.rotation.y;
-        while (dy > Math.PI) dy -= Math.PI * 2;
-        while (dy < -Math.PI) dy += Math.PI * 2;
-        enemy.group.rotation.y += dy * Math.min(1, dt * 14);
-      }
+      updateEnemyInterpolation(enemy, now, dt);
       // Doğum koruması: model yanıp söner
       if (enemy.protUntil > wallNow) {
         enemy.group.visible = Math.floor(now / 90) % 2 === 0;
@@ -2735,15 +2844,15 @@ function animate() {
     }
   }
 
-  // Tracer söndürme
+  // Tracer söndürme (havuza iade — geometri/materyal yeniden kullanilir)
   for (let i = tracers.length - 1; i >= 0; i--) {
     const t = tracers[i];
     t.life -= dt;
     t.mesh.material.opacity = Math.max(0, t.life / 0.08) * 0.85;
     if (t.life <= 0) {
       scene.remove(t.mesh);
-      t.mesh.geometry.dispose();
-      t.mesh.material.dispose();
+      t.mesh.visible = false;
+      TRACER_POOL.push(t);
       tracers.splice(i, 1);
     }
   }
@@ -2753,7 +2862,7 @@ function animate() {
     const p = particles[i];
     p.life -= dt;
     const arr = p.pts.geometry.attributes.position.array;
-    for (let j = 0; j < p.vels.length; j++) {
+    for (let j = 0; j < p.count; j++) {
       p.vels[j].y -= p.grav * dt;
       arr[j * 3] += p.vels[j].x * dt;
       arr[j * 3 + 1] += p.vels[j].y * dt;
@@ -2763,13 +2872,13 @@ function animate() {
     p.pts.material.opacity = Math.max(0, p.life / p.max);
     if (p.life <= 0) {
       scene.remove(p.pts);
-      p.pts.geometry.dispose();
-      p.pts.material.dispose();
+      p.pts.visible = false;
+      PARTICLE_POOL.push(p);
       particles.splice(i, 1);
     }
   }
 
-  // Fırlatılan kovanlar
+  // Fırlatılan kovanlar (havuza iade)
   for (let i = shells.length - 1; i >= 0; i--) {
     const s = shells[i];
     s.life -= dt;
@@ -2784,7 +2893,8 @@ function animate() {
     }
     if (s.life <= 0) {
       scene.remove(s.mesh);
-      s.mesh.geometry.dispose();
+      s.mesh.visible = false;
+      SHELL_POOL.push(s);
       shells.splice(i, 1);
     }
   }
