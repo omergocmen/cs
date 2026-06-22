@@ -193,6 +193,15 @@
   }
   #pickup-hint b { color: #ffb13d; }
 
+  #buff-indicator {
+    position: absolute; left: 16px; bottom: 120px; display: flex; flex-direction: column; gap: 6px;
+  }
+  #buff-indicator .buff {
+    background: rgba(0,0,0,0.6); padding: 5px 12px; border-radius: 7px; font-size: 15px;
+    border: 1px solid rgba(255,177,61,0.55); color: #ffe9c4; text-shadow: 0 1px 3px #000;
+  }
+  #buff-indicator .buff b { color: #ffd36d; }
+
   #dmg-vignette {
     position: absolute; inset: 0; opacity: 0; transition: opacity .4s;
     background: radial-gradient(ellipse at center, transparent 55%, rgba(255,0,0,0.55) 100%);
@@ -416,6 +425,7 @@
     <div id="reloadbar-bg"><div id="reloadbar"></div></div>
   </div>
   <div id="pickup-hint"><b>[E]</b> <span id="pickup-name"></span> al</div>
+  <div id="buff-indicator"></div>
   <div id="death-overlay">
     <h2>ÖLDÜN</h2>
     <p><span id="respawn-count">3</span> saniye sonra yeniden doğacaksın...</p>

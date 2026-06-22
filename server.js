@@ -128,6 +128,17 @@ const KING_START_PROTECT_MS = 3000;
 const HEALTH_AMOUNT = 40;
 const RESPAWN_MS = 3000;
 const WEAPON_RESPAWN_MS = 25000;
+
+// --- Airdrop (buff kasalari) — simdilik sadece Arena modu ---
+const AIRDROP_MODES = new Set(['arena']);
+// Sağlık paketleriyle aynı noktalar: hepsi açık ve alınabilir olduğu kanıtlı
+// (harita ortası [0,0,0] merkezi yapı yüzünden erişilemiyordu, o yüzden kullanılmıyor).
+const AIRDROP_POINTS = HEALTH_POINTS;
+const AIRDROP_BUFFS = ['weapon', 'overheal', 'rapid', 'doubledmg'];
+const AIRDROP_MIN_MS = 35000, AIRDROP_MAX_MS = 55000; // ne sıklıkla kasa düşsün
+const BUFF_DURATION_MS = 10000;  // süreli buff'lar (rapid/doubledmg)
+const OVERHEAL_HP = 150;         // overheal tavanı
+const AIRDROP_WEAPON = 'sniper'; // kasadan çıkan güçlü silah (AWP)
 const SPAWN_PROTECT_MS = 1000;
 const ROUND_RESTART_MS = 4000;
 const TEAMS = ['police', 'bandit'];
@@ -181,6 +192,7 @@ function getRoom(socket) {
 
 function clearRoomTimers(room) {
   if (room.healthTimer) { clearTimeout(room.healthTimer); room.healthTimer = null; }
+  if (room.dropTimer) { clearTimeout(room.dropTimer); room.dropTimer = null; }
   if (room.domTimer) { clearInterval(room.domTimer); room.domTimer = null; }
   if (room.footyTimer) { clearInterval(room.footyTimer); room.footyTimer = null; }
   for (const t of room.timers) clearTimeout(t);
@@ -200,6 +212,19 @@ function scheduleHealthPack(room) {
   }, delay);
 }
 
+function scheduleAirdrop(room) {
+  if (room.dropTimer) clearTimeout(room.dropTimer);
+  const delay = AIRDROP_MIN_MS + Math.random() * (AIRDROP_MAX_MS - AIRDROP_MIN_MS);
+  room.dropTimer = setTimeout(() => {
+    if (!ROOMS.has(room.code) || !room.started) return;
+    const id = ++room.dropSeq;
+    const pos = AIRDROP_POINTS[Math.floor(Math.random() * AIRDROP_POINTS.length)];
+    room.drops.set(id, pos);
+    io.to(room.code).emit('airdropSpawn', { id, pos });
+    scheduleAirdrop(room);
+  }, delay);
+}
+
 function startGame(room) {
   room.started = true;
   room.round = 1;
@@ -207,6 +232,7 @@ function startGame(room) {
   room.teamScores = room.teamScores || { police: 0, bandit: 0 };
   room.footyScore = { police: 0, bandit: 0 };
   room.packs.clear();
+  room.drops.clear();
   clearRoomTimers(room);
 
   // Silahlari yere koy (Gun Game ve Kilic'te yerde silah yok)
@@ -222,6 +248,7 @@ function startGame(room) {
 
   io.to(room.code).emit('start', { players, weapons, arena: room.arena, mode: room.mode, round: room.round, teamScores: room.teamScores, kingProtectMs: room.mode === 'kral' ? KING_START_PROTECT_MS : 0, footyScore: room.footyScore });
   if (!NO_HEALTH_MODES.has(room.mode)) scheduleHealthPack(room);
+  if (AIRDROP_MODES.has(room.mode)) scheduleAirdrop(room);
   if (room.mode === 'domination') startDomination(room);
   if (room.mode === 'futbol') startFooty(room);
 }
@@ -418,6 +445,7 @@ function scoreMap(room) {
 }
 
 function spawnPlayer(room, p) {
+  p.buff = null; p.buffUntil = 0; // yeniden doğunca süreli buff'lar (overheal maxHp dahil) sıfırlanır
   if (room.mode === 'awp') {
     let idx = 0;
     for (const other of room.players.values()) {
@@ -590,6 +618,7 @@ function joinPlayer(room, socket, name, avatar, team) {
     avatar: typeof avatar === 'string' ? avatar.slice(0, 20) : 'komando',
     hp: 100, kills: 0, deaths: 0, wins: 0, protUntil: 0,
     maxHp: 100, isKing: false,
+    buff: null, buffUntil: 0,
     pos: [0, 0, 0], yaw: 0, crouch: false,
     team: resolveTeam(room, team),
   });
@@ -614,6 +643,9 @@ io.on('connection', (socket) => {
       players: new Map(),
       packs: new Map(),
       packSeq: 0,
+      drops: new Map(),
+      dropSeq: 0,
+      dropTimer: null,
       weapons: new Map(),
       timers: new Set(),
       healthTimer: null,
@@ -661,6 +693,7 @@ io.on('connection', (socket) => {
         footyScore: room.footyScore,
       });
       for (const [id, pos] of room.packs) socket.emit('healthSpawn', { id, pos });
+      for (const [id, pos] of room.drops) socket.emit('airdropSpawn', { id, pos });
       socket.to(room.code).emit('playerJoined', playerInfo(p));
       // Kilic: yeni katilanla birlikte mevcut round cozulebilir hale geldiyse bitir
       checkRoundEndFFA(room);
@@ -791,6 +824,8 @@ io.on('connection', (socket) => {
       const d = DAMAGE[gun] || DAMAGE.rifle;
       dmg = part === 'head' ? d.head : d.body;
     }
+    // Airdrop: çift hasar buff'ı aktifse hasarı 2 katına çıkar
+    if (attacker.buff === 'doubledmg' && Date.now() < attacker.buffUntil) dmg *= 2;
     victim.hp = Math.max(0, victim.hp - dmg);
     io.to(room.code).emit('health', { id: victim.id, hp: victim.hp, part, by: attacker.id });
 
@@ -847,6 +882,32 @@ io.on('connection', (socket) => {
     room.packs.delete(id);
     p.hp = Math.min(p.maxHp || 100, p.hp + HEALTH_AMOUNT);
     io.to(room.code).emit('healthTaken', { id, by: socket.id, hp: p.hp });
+  });
+
+  // Airdrop kasası alma — sunucu rastgele bir buff seçip uygular
+  socket.on('pickupDrop', (id) => {
+    const room = getRoom(socket);
+    if (!room || !room.started) return;
+    if (!AIRDROP_MODES.has(room.mode)) return;
+    const p = room.players.get(socket.id);
+    if (!p || p.hp <= 0) return;
+    if (!room.drops.has(id)) return;
+    room.drops.delete(id);
+    const buff = AIRDROP_BUFFS[Math.floor(Math.random() * AIRDROP_BUFFS.length)];
+    const payload = { id, by: socket.id, buff };
+    if (buff === 'overheal') {
+      p.maxHp = OVERHEAL_HP;
+      p.hp = OVERHEAL_HP;
+      payload.hp = p.hp;
+      payload.maxHp = p.maxHp;
+    } else if (buff === 'weapon') {
+      payload.weapon = AIRDROP_WEAPON;
+    } else { // rapid | doubledmg (süreli)
+      p.buff = buff;
+      p.buffUntil = Date.now() + BUFF_DURATION_MS;
+      payload.duration = BUFF_DURATION_MS;
+    }
+    io.to(room.code).emit('airdropTaken', payload);
   });
 
   // Yerden silah alma

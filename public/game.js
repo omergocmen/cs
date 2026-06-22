@@ -697,6 +697,8 @@ const player = {
   reloadStart: 0,
   reloadEnd: 0,
   lastShot: 0,
+  rapidUntil: 0, // airdrop: hızlı ateş buff'ı bitiş zamanı (performance.now ms)
+  dmgUntil: 0,   // airdrop: çift hasar buff'ı bitiş zamanı (görsel/HUD; hasarı sunucu uygular)
   zoomed: false,
   kills: 0,
   deaths: 0,
@@ -1384,6 +1386,7 @@ function nameById(id) {
 // ================== YERDEKİ NESNELER ==================
 const groundWeapons = new Map(); // id -> {type, mesh, pos}
 const healthPacks = new Map();   // id -> {mesh, pos}
+const airdrops = new Map();      // id -> {mesh, beam, pos, y, landed}
 
 function spawnGroundWeapon(w) {
   const grp = new THREE.Group();
@@ -1425,6 +1428,44 @@ function spawnHealthPack(id, pos) {
   grp.position.set(pos[0], gy + 0.5, pos[2]);
   scene.add(grp);
   healthPacks.set(id, { mesh: grp, pos: new THREE.Vector3(pos[0], gy, pos[2]) });
+}
+
+function spawnAirdrop(id, pos) {
+  const gy = groundHeightAt(pos[0], pos[2]);
+  const grp = new THREE.Group();
+  // Parlak kasa (altın/turuncu, fark edilsin)
+  const box = new THREE.Mesh(
+    new THREE.BoxGeometry(0.85, 0.85, 0.85),
+    new THREE.MeshStandardMaterial({ color: 0xffb13d, emissive: 0xff7a00, emissiveIntensity: 0.5, roughness: 0.5, metalness: 0.3 })
+  );
+  box.castShadow = true;
+  // Kasa kayışları (koyu çizgiler)
+  const beltMat = new THREE.MeshStandardMaterial({ color: 0x3a2a10, roughness: 0.7 });
+  const b1 = new THREE.Mesh(new THREE.BoxGeometry(0.9, 0.18, 0.9), beltMat);
+  const b2 = new THREE.Mesh(new THREE.BoxGeometry(0.9, 0.9, 0.18), beltMat);
+  const light = new THREE.PointLight(0xffae42, 1.8, 7);
+  light.position.y = 1;
+  grp.add(box, b1, b2, light);
+  // Yukarıdan inen ışık huzmesi
+  const beam = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.7, 0.7, 40, 12, 1, true),
+    new THREE.MeshBasicMaterial({ color: 0xffc451, transparent: true, opacity: 0.16, side: THREE.DoubleSide, depthWrite: false, blending: THREE.AdditiveBlending })
+  );
+  beam.position.set(pos[0], gy + 20, pos[2]);
+  scene.add(beam);
+
+  const startY = gy + 26; // gökten iner
+  grp.position.set(pos[0], startY, pos[2]);
+  scene.add(grp);
+  airdrops.set(id, { mesh: grp, beam, pos: new THREE.Vector3(pos[0], gy, pos[2]), y: startY, landed: false });
+}
+
+function removeAirdrop(id) {
+  const a = airdrops.get(id);
+  if (!a) return;
+  scene.remove(a.mesh);
+  scene.remove(a.beam);
+  airdrops.delete(id);
 }
 
 // ================== DOMINATION BÖLGELERİ ==================
@@ -1735,7 +1776,9 @@ function tryShoot() {
   const g = GUNS[player.gun];
   if (g.melee) { meleeAttack('heavy'); return; } // sol tik = agir vurus (kendi beklemesi var)
   const now = performance.now();
-  if (now - player.lastShot < g.fireDelay) return;
+  // Airdrop "hızlı ateş" buff'ı aktifse atış aralığını kısalt (kılıç hariç)
+  const fireDelay = (now < player.rapidUntil) ? g.fireDelay * 0.45 : g.fireDelay;
+  if (now - player.lastShot < fireDelay) return;
   if (player.ammo <= 0) { playBlip(200, 0.06, 0.12); tryReload(); return; }
 
   player.lastShot = now;
@@ -1966,6 +2009,14 @@ function checkPickups(now = performance.now()) {
       }
     }
   }
+
+  // Airdrop kasaları: yere indikten sonra üzerinden geçince otomatik alınır
+  for (const [id, a] of airdrops) {
+    if (a.landed && player.pos.distanceTo(a.pos) < 1.6) {
+      socket.emit('pickupDrop', id);
+      break;
+    }
+  }
 }
 
 // ================== HUD ==================
@@ -1984,6 +2035,16 @@ function updateHpHUD() {
 function updateAmmoHUD() {
   if (GUNS[player.gun].melee) { $('ammo').innerHTML = `🗡️ <small>∞</small>`; return; }
   $('ammo').innerHTML = `${player.ammo} <small>/ ${GUNS[player.gun].mag}</small>`;
+}
+// Aktif airdrop buff'larını sol-altta sayaçla göster
+function updateBuffHUD(now) {
+  const el = $('buff-indicator');
+  if (!el) return;
+  let html = '';
+  if (player.alive && now < player.rapidUntil) html += `<div class="buff">🔥 Hızlı Ateş <b>${Math.ceil((player.rapidUntil - now) / 1000)}s</b></div>`;
+  if (player.alive && now < player.dmgUntil) html += `<div class="buff">💥 Çift Hasar <b>${Math.ceil((player.dmgUntil - now) / 1000)}s</b></div>`;
+  if (player.alive && player.maxHp > 100) html += `<div class="buff">❤️ Overheal <b>${Math.max(0, player.hp)}</b></div>`;
+  el.innerHTML = html;
 }
 function updateScoreHUD() {
   // Futbol skor tabelası (büyük, ortada) — diğer modlarda gizli
@@ -2190,6 +2251,7 @@ socket.on('start', ({ players, weapons, arena, mode, round, teamScores: scores, 
   groundWeapons.clear();
   for (const p of [...healthPacks.values()]) scene.remove(p.mesh);
   healthPacks.clear();
+  for (const id of [...airdrops.keys()]) removeAirdrop(id);
   clearDomZones();
 
   for (const info of players) {
@@ -2204,6 +2266,8 @@ socket.on('start', ({ players, weapons, arena, mode, round, teamScores: scores, 
       player.protUntil = player.isKing && kingProtectMs ? Date.now() + kingProtectMs : 0;
       player.alive = info.hp > 0;
       player.kills = info.kills;
+      player.rapidUntil = 0; // yeni maçta airdrop buff'ları temiz
+      player.dmgUntil = 0;
       myTeam = info.team || null;
       player.crouch = false;
       player.eyeHeight = STAND_EYE_HEIGHT;
@@ -2369,6 +2433,8 @@ socket.on('death', ({ victim, killer, headshot, scores }) => {
     player.streak = 0;
     player.alive = false;
     player.hp = 0;
+    player.rapidUntil = 0; // ölünce süreli airdrop buff'ları biter
+    player.dmgUntil = 0;
     updateHpHUD();
     if (gameMode === 'team' && startTeamSpectate()) {
       $('death-overlay').style.display = 'none';
@@ -2528,6 +2594,7 @@ socket.on('roundStart', ({ players, weapons, round, teamScores: scores, kingProt
   groundWeapons.clear();
   for (const p of [...healthPacks.values()]) scene.remove(p.mesh);
   healthPacks.clear();
+  for (const id of [...airdrops.keys()]) removeAirdrop(id);
   removeAllEnemies();
   for (const info of players) {
     if (info.id === socket.id) {
@@ -2607,6 +2674,41 @@ socket.on('weaponTaken', ({ id, by, type }) => {
 
 socket.on('weaponSpawn', (w) => {
   spawnGroundWeapon(w);
+});
+
+socket.on('airdropSpawn', ({ id, pos }) => {
+  spawnAirdrop(id, pos);
+  toast('📦 Airdrop geliyor! Kasayı kapan buff alır.');
+  centerBanner('📦 AIRDROP!', 'gold', 1100);
+  playBlip(520, 0.18, 0.18);
+});
+
+socket.on('airdropTaken', ({ id, by, buff, hp, maxHp, weapon, duration }) => {
+  removeAirdrop(id);
+  const mine = by === socket.id;
+  const dur = duration || 10000;
+  if (buff === 'overheal') {
+    if (mine) {
+      player.maxHp = maxHp || 150;
+      player.hp = hp || player.maxHp;
+      updateHpHUD();
+      centerBanner('❤️ OVERHEAL!', 'blue', 1200);
+    } else {
+      const e = enemyById(by);
+      if (e) { e.maxHp = maxHp || 150; e.hp = hp || e.maxHp; }
+    }
+  } else if (buff === 'weapon') {
+    if (mine) {
+      const wtype = weapon || 'sniper';
+      switchGun(wtype);
+      centerBanner(`🔫 ${GUNS[wtype].name}!`, 'gold', 1200);
+    }
+  } else if (buff === 'rapid') {
+    if (mine) { player.rapidUntil = performance.now() + dur; centerBanner('🔥 HIZLI ATEŞ!', 'gold', 1200); }
+  } else if (buff === 'doubledmg') {
+    if (mine) { player.dmgUntil = performance.now() + dur; centerBanner('💥 ÇİFT HASAR!', 'red', 1200); }
+  }
+  if (mine) { toast('Buff aktif!'); playBlip(900, 0.14, 0.22); }
 });
 
 socket.on('playerJoined', (info) => {
@@ -2828,10 +2930,24 @@ function animate() {
       p.mesh.rotation.y += dt * 2;
       p.mesh.position.y = p.pos.y + 0.5 + Math.sin(now * 0.004) * 0.12;
     }
+    // Airdrop kasaları: gökten iner, sonra hafifçe süzülür; ışık huzmesi nabız atar
+    for (const a of airdrops.values()) {
+      a.mesh.rotation.y += dt * 1.2;
+      const restY = a.pos.y + 0.55;
+      if (!a.landed) {
+        a.y = Math.max(restY, a.y - dt * 9); // ~9 birim/sn iniş
+        if (a.y <= restY + 0.01) a.landed = true;
+        a.mesh.position.y = a.y;
+      } else {
+        a.mesh.position.y = restY + Math.sin(now * 0.004) * 0.12;
+      }
+      a.beam.material.opacity = 0.12 + Math.sin(now * 0.005) * 0.06;
+    }
     // Domination bölge halkaları yavaşça döner (hafif)
     for (const z of domZones) z.ring.rotation.z += dt * 0.6;
 
     checkPickups(now);
+    updateBuffHUD(now);
 
     // Pozisyon gönder
     if (player.alive && now - lastSend > SEND_INTERVAL) {
