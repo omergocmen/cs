@@ -136,7 +136,7 @@ const AIRDROP_MODES = new Set(['arena']);
 const AIRDROP_POINTS = HEALTH_POINTS;
 const AIRDROP_BUFFS = ['weapon', 'overheal', 'rapid', 'doubledmg'];
 const AIRDROP_MIN_MS = 35000, AIRDROP_MAX_MS = 55000; // ne sıklıkla kasa düşsün
-const BUFF_DURATION_MS = 10000;  // süreli buff'lar (rapid/doubledmg)
+const BUFF_DURATION_MS = 30000;  // süreli buff'lar (rapid/doubledmg)
 const OVERHEAL_HP = 150;         // overheal tavanı
 const AIRDROP_WEAPON = 'sniper'; // kasadan çıkan güçlü silah (AWP)
 const SPAWN_PROTECT_MS = 1000;
