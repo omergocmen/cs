@@ -1777,14 +1777,18 @@ function tryShoot() {
   if (g.melee) { meleeAttack('heavy'); return; } // sol tik = agir vurus (kendi beklemesi var)
   const now = performance.now();
   // Airdrop "hızlı ateş" buff'ı aktifse atış aralığını kısalt (kılıç hariç)
-  const fireDelay = (now < player.rapidUntil) ? g.fireDelay * 0.45 : g.fireDelay;
+  // ve mermi sınırsız olsun (şarjör tükenmez, reload gerekmez)
+  const rapid = now < player.rapidUntil;
+  const fireDelay = rapid ? g.fireDelay * 0.45 : g.fireDelay;
   if (now - player.lastShot < fireDelay) return;
-  if (player.ammo <= 0) { playBlip(200, 0.06, 0.12); tryReload(); return; }
+  if (!rapid && player.ammo <= 0) { playBlip(200, 0.06, 0.12); tryReload(); return; }
 
   player.lastShot = now;
-  player.ammo--;
-  updateAmmoHUD();
-  if (player.ammo === 0) setTimeout(() => tryReload(), 120);
+  if (!rapid) {
+    player.ammo--;
+    updateAmmoHUD();
+    if (player.ammo === 0) setTimeout(() => tryReload(), 120);
+  }
   playShotSound(player.gun);
   flash.intensity = 4;
   flashSprite.material.rotation = Math.random() * Math.PI * 2;
@@ -2034,6 +2038,7 @@ function updateHpHUD() {
 }
 function updateAmmoHUD() {
   if (GUNS[player.gun].melee) { $('ammo').innerHTML = `🗡️ <small>∞</small>`; return; }
+  if (player.alive && performance.now() < player.rapidUntil) { $('ammo').innerHTML = `∞ <small>🔥</small>`; return; }
   $('ammo').innerHTML = `${player.ammo} <small>/ ${GUNS[player.gun].mag}</small>`;
 }
 // Aktif airdrop buff'larını sol-altta sayaçla göster
@@ -2045,7 +2050,12 @@ function updateBuffHUD(now) {
   if (player.alive && now < player.dmgUntil) html += `<div class="buff">💥 Çift Hasar <b>${Math.ceil((player.dmgUntil - now) / 1000)}s</b></div>`;
   if (player.alive && player.maxHp > 100) html += `<div class="buff">❤️ Overheal <b>${Math.max(0, player.hp)}</b></div>`;
   el.innerHTML = html;
+  // Hızlı ateş bitince ammo HUD'ını gerçek mermi sayısına döndür (tek seferlik)
+  const rapidNow = player.alive && now < player.rapidUntil;
+  if (_rapidHudActive && !rapidNow) updateAmmoHUD();
+  _rapidHudActive = rapidNow;
 }
+let _rapidHudActive = false;
 function updateScoreHUD() {
   // Futbol skor tabelası (büyük, ortada) — diğer modlarda gizli
   const fs = $('futbol-score');
@@ -2704,7 +2714,7 @@ socket.on('airdropTaken', ({ id, by, buff, hp, maxHp, weapon, duration }) => {
       centerBanner(`🔫 ${GUNS[wtype].name}!`, 'gold', 1200);
     }
   } else if (buff === 'rapid') {
-    if (mine) { player.rapidUntil = performance.now() + dur; centerBanner('🔥 HIZLI ATEŞ!', 'gold', 1200); }
+    if (mine) { player.rapidUntil = performance.now() + dur; updateAmmoHUD(); centerBanner('🔥 HIZLI ATEŞ!', 'gold', 1200); }
   } else if (buff === 'doubledmg') {
     if (mine) { player.dmgUntil = performance.now() + dur; centerBanner('💥 ÇİFT HASAR!', 'red', 1200); }
   }
