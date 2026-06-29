@@ -1,0 +1,28 @@
+# Oyun Context Indeksi
+
+Bu dosya oyun modlari context yapisinin ana indeksidir. Detaylar oyun bazli markdown dosyalarina ayrilmistir.
+
+## Genel Kaynaklar
+
+- Genel mod altyapisi: `context/general.md`
+- Harita ve arena notlari: `context/arenas.md`
+- Context guncelleme kurali: `.context-rule.md`
+
+## Oyun Modlari
+
+- Duel: `context/duel.md`
+- Arena: `context/arena.md`
+- Takim: `context/team.md`
+- Gun Game: `context/gungame.md`
+- Bolge Kapma: `context/domination.md`
+- Kilic: `context/kilic.md`
+- Kral Kim: `context/kral.md`
+- AWP 1v1: `context/awp.md`
+- Futbol: `context/futbol.md`
+
+## Bakim Notu
+
+- Mod davranisini etkileyen her kod degisikliginden sonra `.context-rule.md` kontrol edilmelidir.
+- Degisiklik tek bir modu etkiliyorsa sadece ilgili `context/<mod>.md` dosyasi guncellenmelidir.
+- Degisiklik modlar arasi ortak altyapiyi etkiliyorsa `context/general.md` de guncellenmelidir.
+- Degisiklik arena secimi veya harita eslesmesini etkiliyorsa `context/arenas.md` de guncellenmelidir.

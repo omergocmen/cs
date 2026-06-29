@@ -1254,14 +1254,14 @@ function createEnemy(info) {
   return enemy;
 }
 
-// Takim modunda isim etiketi yalnizca kendi takimindakiler icin gorunur;
-// dusmanlarin etiketi gizlenir (duvar arkasindan konum sizdirmasin diye).
+// Arena modunda isim etiketleri gizlidir; takim modunda yalnizca kendi takimindakiler gorunur.
 function nameTagVisibleFor(enemy) {
+  if (gameMode === 'arena') return false;
   if (!isTeamMode()) return true;
   return !!myTeam && enemy.team === myTeam;
 }
 
-// Tum rakiplerin isim etiketi gorunurlugunu (kendi takimima gore) tazele.
+// Tum rakiplerin isim etiketi gorunurlugunu moda/takima gore tazele.
 function refreshTeamVisibility() {
   for (const e of enemies.values()) {
     if (e.nameTag) e.nameTag.visible = nameTagVisibleFor(e);
