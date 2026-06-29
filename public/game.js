@@ -1386,7 +1386,40 @@ function nameById(id) {
 // ================== YERDEKİ NESNELER ==================
 const groundWeapons = new Map(); // id -> {type, mesh, pos}
 const healthPacks = new Map();   // id -> {mesh, pos}
-const airdrops = new Map();      // id -> {mesh, beam, pos, y, landed}
+const airdrops = new Map();      // id -> {mesh, beam, pos, y, landed, lightEntry}
+
+// ---- Pickup ışık havuzu ----
+// ÖNEMLİ: Three.js'te sahnedeki ışık SAYISI değişince o karede TÜM materyallerin
+// shader programları yeniden derlenir → görünür kasma/donma. Bu yüzden kasa/sağlık
+// paketi düştüğünde sahneye ışık EKLEMEK yerine, başta sabit sayıda ışığı sahnede
+// tutup (kullanılmazken intensity 0) havuzdan ödünç alıyoruz. Işık sayısı sabit
+// kaldığı için yeniden derleme (kasma) hiç olmaz.
+const PICKUP_LIGHT_POOL = [];
+const PICKUP_LIGHT_MAX = 3; // aynı anda parlayabilecek kasa+paket sayısı
+for (let i = 0; i < PICKUP_LIGHT_MAX; i++) {
+  const l = new THREE.PointLight(0xffffff, 0, 7);
+  l.visible = true;        // sahnede kalsın (görünmezlik de ışık sayısını değiştirir)
+  scene.add(l);
+  PICKUP_LIGHT_POOL.push({ light: l, busy: false });
+}
+function acquirePickupLight(color, intensity, dist, x, y, z) {
+  for (const e of PICKUP_LIGHT_POOL) {
+    if (!e.busy) {
+      e.busy = true;
+      e.light.color.setHex(color);
+      e.light.intensity = intensity;
+      e.light.distance = dist;
+      e.light.position.set(x, y, z);
+      return e;
+    }
+  }
+  return null; // havuz dolu → o drop ışıksız kalır (emissive parlaklık yine var, kasma yok)
+}
+function releasePickupLight(entry) {
+  if (!entry) return;
+  entry.light.intensity = 0;
+  entry.busy = false;
+}
 
 function spawnGroundWeapon(w) {
   const grp = new THREE.Group();
@@ -1421,13 +1454,13 @@ function spawnHealthPack(id, pos) {
   const c2 = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.42, 0.41), crossMat);
   c2.rotation.x = Math.PI / 2;
   c2.position.y = 0.21;
-  const light = new THREE.PointLight(0x21c25c, 1.5, 5);
-  light.position.y = 0.8;
-  grp.add(boxM, c1, c2, light);
+  grp.add(boxM, c1, c2);
   const gy = groundHeightAt(pos[0], pos[2]);
   grp.position.set(pos[0], gy + 0.5, pos[2]);
   scene.add(grp);
-  healthPacks.set(id, { mesh: grp, pos: new THREE.Vector3(pos[0], gy, pos[2]) });
+  // Havuzdan ışık ödünç al (sahneye yeni ışık eklemeden — kasma olmaz)
+  const lightEntry = acquirePickupLight(0x21c25c, 1.5, 5, pos[0], gy + 1.3, pos[2]);
+  healthPacks.set(id, { mesh: grp, pos: new THREE.Vector3(pos[0], gy, pos[2]), lightEntry });
 }
 
 function spawnAirdrop(id, pos) {
@@ -1443,9 +1476,7 @@ function spawnAirdrop(id, pos) {
   const beltMat = new THREE.MeshStandardMaterial({ color: 0x3a2a10, roughness: 0.7 });
   const b1 = new THREE.Mesh(new THREE.BoxGeometry(0.9, 0.18, 0.9), beltMat);
   const b2 = new THREE.Mesh(new THREE.BoxGeometry(0.9, 0.9, 0.18), beltMat);
-  const light = new THREE.PointLight(0xffae42, 1.8, 7);
-  light.position.y = 1;
-  grp.add(box, b1, b2, light);
+  grp.add(box, b1, b2);
   // Yukarıdan inen ışık huzmesi
   const beam = new THREE.Mesh(
     new THREE.CylinderGeometry(0.7, 0.7, 40, 12, 1, true),
@@ -1457,7 +1488,9 @@ function spawnAirdrop(id, pos) {
   const startY = gy + 26; // gökten iner
   grp.position.set(pos[0], startY, pos[2]);
   scene.add(grp);
-  airdrops.set(id, { mesh: grp, beam, pos: new THREE.Vector3(pos[0], gy, pos[2]), y: startY, landed: false });
+  // Havuzdan ışık ödünç al (sahneye yeni ışık eklemeden — kasma olmaz)
+  const lightEntry = acquirePickupLight(0xffae42, 1.8, 7, pos[0], startY + 1, pos[2]);
+  airdrops.set(id, { mesh: grp, beam, pos: new THREE.Vector3(pos[0], gy, pos[2]), y: startY, landed: false, lightEntry });
 }
 
 function removeAirdrop(id) {
@@ -1465,6 +1498,7 @@ function removeAirdrop(id) {
   if (!a) return;
   scene.remove(a.mesh);
   scene.remove(a.beam);
+  releasePickupLight(a.lightEntry);
   airdrops.delete(id);
 }
 
@@ -2259,7 +2293,7 @@ socket.on('start', ({ players, weapons, arena, mode, round, teamScores: scores, 
   removeAllEnemies();
   for (const w of [...groundWeapons.values()]) scene.remove(w.mesh);
   groundWeapons.clear();
-  for (const p of [...healthPacks.values()]) scene.remove(p.mesh);
+  for (const p of [...healthPacks.values()]) { scene.remove(p.mesh); releasePickupLight(p.lightEntry); }
   healthPacks.clear();
   for (const id of [...airdrops.keys()]) removeAirdrop(id);
   clearDomZones();
@@ -2602,7 +2636,7 @@ socket.on('roundStart', ({ players, weapons, round, teamScores: scores, kingProt
   teamScores = scores || teamScores;
   for (const w of [...groundWeapons.values()]) scene.remove(w.mesh);
   groundWeapons.clear();
-  for (const p of [...healthPacks.values()]) scene.remove(p.mesh);
+  for (const p of [...healthPacks.values()]) { scene.remove(p.mesh); releasePickupLight(p.lightEntry); }
   healthPacks.clear();
   for (const id of [...airdrops.keys()]) removeAirdrop(id);
   removeAllEnemies();
@@ -2659,7 +2693,7 @@ socket.on('healthSpawn', ({ id, pos }) => {
 
 socket.on('healthTaken', ({ id, by, hp }) => {
   const p = healthPacks.get(id);
-  if (p) { scene.remove(p.mesh); healthPacks.delete(id); }
+  if (p) { scene.remove(p.mesh); releasePickupLight(p.lightEntry); healthPacks.delete(id); }
   if (by === socket.id) {
     player.hp = hp;
     updateHpHUD();
@@ -2952,6 +2986,8 @@ function animate() {
         a.mesh.position.y = restY + Math.sin(now * 0.004) * 0.12;
       }
       a.beam.material.opacity = 0.12 + Math.sin(now * 0.005) * 0.06;
+      // Havuz ışığı kasayla birlikte insin
+      if (a.lightEntry) a.lightEntry.light.position.set(a.pos.x, a.mesh.position.y + 1, a.pos.z);
     }
     // Domination bölge halkaları yavaşça döner (hafif)
     for (const z of domZones) z.ring.rotation.z += dt * 0.6;
